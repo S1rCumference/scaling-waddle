@@ -29,8 +29,8 @@ class OpenAiCompatibleProvider(
             runCatching {
                 val body = JSONObject()
                     .put("model", config.model)
-                    .put("messages", messages.toJson())
-                if (tools.isNotEmpty()) body.put("tools", tools.toJson())
+                    .put("messages", messages.toMessagesJson())
+                if (tools.isNotEmpty()) body.put("tools", tools.toToolsJson())
 
                 val headers = buildMap {
                     put("Content-Type", "application/json")
@@ -41,8 +41,8 @@ class OpenAiCompatibleProvider(
             }.getOrElse { LlmResponse.failed(it.message ?: "request failed") }
         }
 
-    private fun List<ChatMessage>.toJson() = JSONArray().apply {
-        this@toJson.forEach { message ->
+    private fun List<ChatMessage>.toMessagesJson() = JSONArray().apply {
+        this@toMessagesJson.forEach { message ->
             put(
                 JSONObject()
                     .put(
@@ -60,8 +60,8 @@ class OpenAiCompatibleProvider(
         }
     }
 
-    private fun List<ToolSpec>.toJson() = JSONArray().apply {
-        this@toJson.forEach { tool ->
+    private fun List<ToolSpec>.toToolsJson() = JSONArray().apply {
+        this@toToolsJson.forEach { tool ->
             put(
                 JSONObject()
                     .put("type", "function")

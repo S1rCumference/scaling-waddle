@@ -65,4 +65,4 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Run unit tests
-        run: ./gradlew --no-daemon testRazrDebugUnitTest
+        run: ./gradlew --no-daemon test

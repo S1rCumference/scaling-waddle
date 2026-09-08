@@ -30,7 +30,7 @@ class GeminiProvider(private val config: ProviderConfig) : LlmProvider {
                     .joinToString("\n\n") { it.content }
 
                 val body = JSONObject()
-                    .put("contents", messages.filterNot { it.role == Role.SYSTEM }.toJson())
+                    .put("contents", messages.filterNot { it.role == Role.SYSTEM }.toMessagesJson())
                 if (system.isNotBlank()) {
                     body.put(
                         "systemInstruction",
@@ -40,7 +40,7 @@ class GeminiProvider(private val config: ProviderConfig) : LlmProvider {
                 if (tools.isNotEmpty()) {
                     body.put(
                         "tools",
-                        JSONArray().put(JSONObject().put("functionDeclarations", tools.toJson())),
+                        JSONArray().put(JSONObject().put("functionDeclarations", tools.toToolsJson())),
                     )
                 }
 
@@ -56,8 +56,8 @@ class GeminiProvider(private val config: ProviderConfig) : LlmProvider {
             }.getOrElse { LlmResponse.failed(it.message ?: "request failed") }
         }
 
-    private fun List<ChatMessage>.toJson() = JSONArray().apply {
-        this@toJson.forEach { message ->
+    private fun List<ChatMessage>.toMessagesJson() = JSONArray().apply {
+        this@toMessagesJson.forEach { message ->
             val part = when (message.role) {
                 Role.TOOL -> JSONObject().put(
                     "functionResponse",
@@ -76,8 +76,8 @@ class GeminiProvider(private val config: ProviderConfig) : LlmProvider {
         }
     }
 
-    private fun List<ToolSpec>.toJson() = JSONArray().apply {
-        this@toJson.forEach { tool ->
+    private fun List<ToolSpec>.toToolsJson() = JSONArray().apply {
+        this@toToolsJson.forEach { tool ->
             put(
                 JSONObject()
                     .put("name", tool.name)

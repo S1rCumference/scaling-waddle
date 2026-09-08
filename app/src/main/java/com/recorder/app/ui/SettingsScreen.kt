@@ -79,7 +79,10 @@ fun SettingsScreen(viewModel: RecorderViewModel) {
 
         Section("Heavy tier") {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(checked = heavyEnabled, onCheckedChange = viewModel::setHeavyTierEnabled)
+                Switch(
+                    checked = heavyEnabled,
+                    onCheckedChange = { enabled -> viewModel.setHeavyTierEnabled(enabled) },
+                )
                 Text(
                     "Send transcript text to the selected provider on a schedule",
                     style = MaterialTheme.typography.bodySmall,

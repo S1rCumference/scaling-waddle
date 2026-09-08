@@ -114,21 +114,26 @@ internal class GmailConnector(auth: GoogleAuth) : GoogleConnector(auth) {
             mapOf("q" to query, "maxResults" to limit.toString()),
         )
         val ids = list.optJSONArray("messages") ?: return "(no results)"
-        return (0 until minOf(ids.length(), limit)).joinToString("\n\n") { i ->
+
+        // A plain loop rather than joinToString: each iteration suspends on another fetch.
+        val out = StringBuilder()
+        for (i in 0 until minOf(ids.length(), limit)) {
             val messageId = ids.optJSONObject(i)?.optString("id").orEmpty()
-            val message = get(
-                "$BASE/messages/$messageId",
-                mapOf("format" to "metadata"),
-            )
+            val message = get("$BASE/messages/$messageId", mapOf("format" to "metadata"))
             val headers = message.optJSONObject("payload")?.optJSONArray("headers")
+
             fun header(name: String): String =
                 (0 until (headers?.length() ?: 0))
                     .mapNotNull { headers?.optJSONObject(it) }
                     .firstOrNull { it.optString("name").equals(name, ignoreCase = true) }
                     ?.optString("value").orEmpty()
 
-            "From: ${header("From")}\nSubject: ${header("Subject")}\n${message.optString("snippet")}"
+            if (out.isNotEmpty()) out.append("\n\n")
+            out.append("From: ").append(header("From")).append('\n')
+                .append("Subject: ").append(header("Subject")).append('\n')
+                .append(message.optString("snippet"))
         }
+        return if (out.isEmpty()) "(no results)" else out.toString()
     }
 
     private suspend fun sendEmail(to: String, subject: String, body: String): String {
