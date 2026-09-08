@@ -1,0 +1,17 @@
+*.iml
+.gradle/
+.idea/
+.DS_Store
+build/
+/captures
+.externalNativeBuildAndroid/
+.cxx/
+local.properties
+*.hprof
+.kotlin/
+models/*.onnx
+models/*.gguf
+models/*.bin
+*.keystore
+*.jks
+!debug.keystore
