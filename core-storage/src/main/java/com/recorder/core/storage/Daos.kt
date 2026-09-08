@@ -41,7 +41,7 @@ interface TranscriptDao {
         """
         SELECT s.* FROM transcript_segments AS s
         JOIN transcript_segments_fts AS f ON f.rowid = s.id
-        WHERE transcript_segments_fts MATCH :query
+        WHERE f MATCH :query
         ORDER BY s.start_ts DESC
         LIMIT :limit
         """
