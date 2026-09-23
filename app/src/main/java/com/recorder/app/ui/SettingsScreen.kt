@@ -297,6 +297,27 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
             }
         }
 
+        Section("Lock down this phone") {
+            Text(
+                "Suspends the dialer, messaging, the Play Store and other apps so only the " +
+                    "recorder runs. Every change is recorded and reversible.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                Text(
+                    viewModel.lockdownStatus(),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(12.dp),
+                )
+            }
+            if (viewModel.lockdownAvailable()) {
+                Row {
+                    Button(onClick = viewModel::applyLockdown) { Text("Lock down") }
+                    TextButton(onClick = viewModel::undoLockdown) { Text("Undo lockdown") }
+                }
+            }
+        }
+
         Section("Power report") {
             Card(Modifier.fillMaxWidth()) {
                 Text(

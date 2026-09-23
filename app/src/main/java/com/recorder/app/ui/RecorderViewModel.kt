@@ -5,6 +5,7 @@ import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import com.recorder.app.BuildConfig
 import com.recorder.app.admin.DeviceOwner
+import com.recorder.app.admin.Lockdown
 import com.recorder.app.cover.CoverDisplays
 import com.recorder.core.asr.AsrEngineFactory
 import com.recorder.core.llm.local.LocalModelRuntime
@@ -266,6 +267,37 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
             }
             _benchmarkRunning.value = false
         }
+    }
+
+    private val lockdown by lazy { Lockdown(getApplication<Application>()) }
+
+    fun lockdownAvailable(): Boolean = lockdown.available
+
+    fun lockdownStatus(): String {
+        lockdown.unavailableReason?.let { return it }
+        return lockdown.candidates().summary()
+    }
+
+    fun applyLockdown() = viewModelScope.launch {
+        val plan = lockdown.candidates()
+        if (plan.isEmpty) {
+            _status.value = "Nothing to suspend."
+            return@launch
+        }
+        val applied = lockdown.apply(plan)
+        settings.setSuspendedPackages(applied.toSet())
+        _status.value = "Suspended ${applied.size} of ${plan.all().size} apps. Reversible."
+    }
+
+    fun undoLockdown() = viewModelScope.launch {
+        val recorded = settings.suspendedPackages.first()
+        if (recorded.isEmpty()) {
+            _status.value = "Nothing was locked down by this app."
+            return@launch
+        }
+        val restored = lockdown.undo(recorded)
+        settings.setSuspendedPackages(emptySet())
+        _status.value = "Restored ${restored.size} apps."
     }
 
     /**

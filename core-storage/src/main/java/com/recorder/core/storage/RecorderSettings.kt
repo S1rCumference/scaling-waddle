@@ -57,6 +57,13 @@ class RecorderSettings(private val context: Context) {
     val vadThreshold: Flow<Float> =
         context.dataStore.data.map { it[Keys.VAD_THRESHOLD] ?: DEFAULT_VAD_THRESHOLD }
 
+    /**
+     * Packages the lockdown step suspended. Persisted rather than recomputed so Undo
+     * restores exactly what was changed and nothing else.
+     */
+    val suspendedPackages: Flow<Set<String>> =
+        context.dataStore.data.map { it[Keys.SUSPENDED_PACKAGES] ?: emptySet() }
+
     /** Whether the user agreed to download models over a metered connection. */
     val allowMeteredDownloads: Flow<Boolean> =
         context.dataStore.data.map { it[Keys.ALLOW_METERED] ?: false }
@@ -81,6 +88,10 @@ class RecorderSettings(private val context: Context) {
 
     suspend fun setAllowMeteredDownloads(allow: Boolean) = edit { it[Keys.ALLOW_METERED] = allow }
 
+    suspend fun setSuspendedPackages(packages: Set<String>) = edit {
+        it[Keys.SUSPENDED_PACKAGES] = packages
+    }
+
     suspend fun setAsrThreads(threads: Int) = edit { it[Keys.ASR_THREADS] = threads.coerceIn(1, 8) }
 
     suspend fun setVadThreshold(threshold: Float) = edit {
@@ -100,6 +111,8 @@ class RecorderSettings(private val context: Context) {
         val HEAVY_TIER_ENABLED = booleanPreferencesKey("heavy_tier_enabled")
         val SETUP_COMPLETE = booleanPreferencesKey("setup_complete")
         val ALLOW_METERED = booleanPreferencesKey("allow_metered_downloads")
+        val SUSPENDED_PACKAGES: Preferences.Key<Set<String>> =
+            stringSetPreferencesKey("suspended_packages")
         val ASR_THREADS = intPreferencesKey("asr_threads")
         val VAD_THRESHOLD = floatPreferencesKey("vad_threshold")
     }
