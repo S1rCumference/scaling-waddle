@@ -66,15 +66,18 @@ SDKMANAGER="$(
 [ -x "${SDKMANAGER:-}" ] || { echo "ERROR: sdkmanager not found under $ANDROID_HOME" >&2; exit 1; }
 echo "sdkmanager: $SDKMANAGER"
 
+# Note: no "yes |" here. Licenses are already accepted by the CI setup step, and piping
+# yes into sdkmanager makes it exit on SIGPIPE, which under pipefail looks exactly like a
+# failed install even when the package installed fine.
 sdk_install() {
   local pkg="$1" out
   out="$(mktemp)"
   echo "  installing $pkg"
-  if (yes 2>/dev/null | "$SDKMANAGER" --install "$pkg") >"$out" 2>&1; then
+  if "$SDKMANAGER" --install "$pkg" </dev/null >"$out" 2>&1; then
     rm -f "$out"
     return 0
   fi
-  echo "  FAILED: $pkg" >&2
+  echo "  sdkmanager exited non-zero for $pkg" >&2
   tail -20 "$out" >&2
   rm -f "$out"
   return 1
@@ -103,11 +106,16 @@ if [ -z "$CMAKE_VERSION" ]; then
 fi
 echo "  CMake: ${CMAKE_VERSION:-none installed, will use PATH}"
 
-# llama.android compiles against API 36.
-sdk_install "platforms;android-36" || {
-  echo "ERROR: could not install platforms;android-36, which llama.android compiles against." >&2
+# llama.android compiles against API 36. Judge this on the directory existing rather than
+# on sdkmanager's exit code, which is not reliable.
+if [ ! -d "$ANDROID_HOME/platforms/android-36" ]; then
+  sdk_install "platforms;android-36" || true
+fi
+[ -d "$ANDROID_HOME/platforms/android-36" ] || {
+  echo "ERROR: platforms;android-36 is not installed and could not be fetched." >&2
   exit 1
 }
+echo "  platform: android-36"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
