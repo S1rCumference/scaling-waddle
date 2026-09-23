@@ -58,8 +58,13 @@ if [ -f "$LLAMA_DEST" ]; then
 fi
 
 : "${ANDROID_HOME:?ANDROID_HOME must be set to build the llama.cpp AAR}"
-SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-[ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager)"
+# The runner installs cmdline-tools under a version directory, not always "latest".
+SDKMANAGER="$(
+  ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1
+)"
+[ -x "${SDKMANAGER:-}" ] || SDKMANAGER="$(command -v sdkmanager || true)"
+[ -x "${SDKMANAGER:-}" ] || { echo "ERROR: sdkmanager not found under $ANDROID_HOME" >&2; exit 1; }
+echo "sdkmanager: $SDKMANAGER"
 
 log "Installing NDK and CMake pinned by llama.android"
 # Versions come from lib/build.gradle.kts at the pinned commit; if the exact CMake is not

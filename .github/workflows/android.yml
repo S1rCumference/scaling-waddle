@@ -27,6 +27,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # v3's default is "tools platform-tools", and the obsolete "tools" package was
+          # removed from the SDK repository, which makes the action itself fail.
+          packages: platform-tools
 
       # The llama.cpp AAR takes a full NDK build, so it is cached on its commit rather
       # than rebuilt every push.
@@ -84,6 +88,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # v3's default is "tools platform-tools", and the obsolete "tools" package was
+          # removed from the SDK repository, which makes the action itself fail.
+          packages: platform-tools
 
       # Unit tests are pure JVM and touch neither native runtime, so the AARs are not
       # fetched here — that keeps the feedback loop short.
@@ -122,6 +130,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # v3's default is "tools platform-tools", and the obsolete "tools" package was
+          # removed from the SDK repository, which makes the action itself fail.
+          packages: platform-tools
 
       - name: Cache llama.cpp AAR
         uses: actions/cache@v4
