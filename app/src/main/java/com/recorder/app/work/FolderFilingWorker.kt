@@ -12,6 +12,7 @@ import com.recorder.app.ServiceLocator
 import com.recorder.core.llm.FolderClassifier
 import com.recorder.core.storage.ensure
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 
 /**
  * Files the segments the cheap heuristic could not place, using the local model, in one
@@ -43,12 +44,19 @@ class FolderFilingWorker(
         var filed = 0
         try {
             for (segment in pending) {
-                val name = runCatching { classifier.classify(segment, known) }
-                    .getOrElse { error ->
-                        Log.w(TAG, "classification failed for ${segment.id}", error)
-                        // A model that cannot answer will not answer for the rest either.
-                        break
-                    }
+                val name = try {
+                    classifier.classify(segment, known)
+                } catch (cancelled: CancellationException) {
+                    // Must propagate, or WorkManager can never stop this job.
+                    throw cancelled
+                } catch (error: Exception) {
+                    Log.w(TAG, "classification failed for ${segment.id}", error)
+                    null
+                }
+
+                // A model that cannot answer once will not answer for the rest either.
+                if (name == null) break
+
                 transcripts.assignFolder(segment.id, folders.ensure(name))
                 filed++
             }
