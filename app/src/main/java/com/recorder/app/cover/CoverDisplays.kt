@@ -2,7 +2,6 @@ package com.recorder.app.cover
 
 import android.content.Context
 import android.hardware.display.DisplayManager
-import android.os.Build
 import android.util.Log
 import android.view.Display
 
@@ -66,15 +65,9 @@ object CoverDisplays {
         else -> "unknown($state)"
     }
 
-    /** The raw device-state integer, whose meaning is OEM-specific. Diagnostics only. */
-    fun deviceStateForDiagnostics(context: Context): String {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return "unavailable below API 31"
-        return runCatching {
-            val manager = context.getSystemService(android.hardware.devicestate.DeviceStateManager::class.java)
-                ?: return "no device state manager"
-            manager.supportedDeviceStates.joinToString(", ") { it.toString() }
-        }.getOrElse { "unreadable: ${it.message}" }
-    }
+    // Note: there is deliberately no DeviceStateManager reading here. That class is a
+    // system API, not visible to ordinary apps, so fold-state integers are simply not
+    // available to us — which is the other reason display power is the signal this uses.
 
     private fun Display.area(): Long {
         val metrics = android.util.DisplayMetrics().also {
