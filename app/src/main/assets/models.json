@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "_comment": [
+    "Model manifest. Sizes and SHA-256 digests marked hashVerified:true were computed by",
+    "downloading the exact URL below and hashing the bytes, not copied from a README.",
+    "",
+    "Chat models are absent for now: they are hosted on huggingface.co, which the build",
+    "environment cannot reach, so their URLs and digests could not be verified. Adding them",
+    "with invented digests would fail every install, and without digests would give up",
+    "integrity checking on the largest downloads. See docs/MODELS.md.",
+    "",
+    "The app works without them: recording, VAD, transcription, keyword tagging and folder",
+    "assignment all run. Only the on-device chat and local heavy tier stay unavailable, and",
+    "Settings > This device says so."
+  ],
+  "models": [
+    {
+      "id": "silero-vad-v6.2.3",
+      "role": "vad",
+      "displayName": "Silero VAD v6.2.3",
+      "fileName": "silero_vad.onnx",
+      "url": "https://raw.githubusercontent.com/snakers4/silero-vad/v6.2.3/src/silero_vad/data/silero_vad.onnx",
+      "revision": "v6.2.3",
+      "sizeBytes": 2327524,
+      "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+      "license": "MIT",
+      "licenseUrl": "https://github.com/snakers4/silero-vad/blob/master/LICENSE",
+      "minRamTier": "LOW_8GB",
+      "required": true,
+      "archive": null,
+      "hashVerified": true,
+      "notes": "Gates ASR so speech recognition only runs on actual speech. Tiny, and the single biggest battery saving in the pipeline. Without it the app falls back to an energy threshold."
+    },
+    {
+      "id": "parakeet-tdt-0.6b-v2-int8",
+      "role": "asr",
+      "displayName": "Parakeet TDT 0.6B v2 (INT8)",
+      "fileName": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2",
+      "revision": "asr-models",
+      "sizeBytes": 482468385,
+      "sha256": "157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad",
+      "license": "CC-BY-4.0",
+      "licenseUrl": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2",
+      "minRamTier": "LOW_8GB",
+      "required": true,
+      "archive": "tar.bz2",
+      "hashVerified": true,
+      "notes": "English transcription. Archive contains encoder.int8.onnx, decoder.int8.onnx, joiner.int8.onnx and tokens.txt; the installer flattens them into models/asr/ and discards the bundled test audio."
+    }
+  ]
+}

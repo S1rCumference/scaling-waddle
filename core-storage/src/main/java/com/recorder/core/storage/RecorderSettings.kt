@@ -37,6 +37,14 @@ class RecorderSettings(private val context: Context) {
     val heavyTierEnabled: Flow<Boolean> =
         context.dataStore.data.map { it[Keys.HEAVY_TIER_ENABLED] ?: false }
 
+    /** False until the first-run wizard has been completed or explicitly skipped. */
+    val setupComplete: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.SETUP_COMPLETE] ?: false }
+
+    /** Whether the user agreed to download models over a metered connection. */
+    val allowMeteredDownloads: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.ALLOW_METERED] ?: false }
+
     suspend fun triggerKeywordsNow(): Set<String> = triggerKeywords.first()
 
     suspend fun setTriggerKeywords(keywords: Set<String>) = edit {
@@ -53,6 +61,10 @@ class RecorderSettings(private val context: Context) {
 
     suspend fun setHeavyTierEnabled(enabled: Boolean) = edit { it[Keys.HEAVY_TIER_ENABLED] = enabled }
 
+    suspend fun setSetupComplete(complete: Boolean) = edit { it[Keys.SETUP_COMPLETE] = complete }
+
+    suspend fun setAllowMeteredDownloads(allow: Boolean) = edit { it[Keys.ALLOW_METERED] = allow }
+
     private suspend fun edit(block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
         context.dataStore.edit(block)
     }
@@ -64,6 +76,8 @@ class RecorderSettings(private val context: Context) {
         val PROVIDER_ENDPOINT = stringPreferencesKey("provider_endpoint")
         val PROVIDER_MODEL = stringPreferencesKey("provider_model")
         val HEAVY_TIER_ENABLED = booleanPreferencesKey("heavy_tier_enabled")
+        val SETUP_COMPLETE = booleanPreferencesKey("setup_complete")
+        val ALLOW_METERED = booleanPreferencesKey("allow_metered_downloads")
     }
 
     companion object {

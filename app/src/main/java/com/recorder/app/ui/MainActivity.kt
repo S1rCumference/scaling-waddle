@@ -40,6 +40,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.recorder.app.service.RecordingService
+import com.recorder.app.ui.setup.SetupViewModel
+import com.recorder.app.ui.setup.SetupWizard
 import com.recorder.core.storage.PendingAction
 import com.recorder.core.storage.TranscriptSegment
 import java.text.SimpleDateFormat
@@ -60,12 +62,32 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val setupViewModel: SetupViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        requestPermissionsThenRecord()
         setContent {
             RecorderTheme {
-                MainScreen(viewModel)
+                val setupComplete by viewModel.setupComplete.collectAsState()
+                var rerunSetup by remember { mutableStateOf(false) }
+
+                when {
+                    // Still reading the flag; showing nothing beats flashing the wizard.
+                    setupComplete == null -> Unit
+
+                    setupComplete == false || rerunSetup -> SetupWizard(setupViewModel) {
+                        rerunSetup = false
+                        requestPermissionsThenRecord()
+                    }
+
+                    else -> {
+                        LaunchedEffect(Unit) { requestPermissionsThenRecord() }
+                        MainScreen(viewModel, onRunSetup = {
+                            setupViewModel.reload()
+                            rerunSetup = true
+                        })
+                    }
+                }
             }
         }
     }
@@ -94,7 +116,7 @@ private enum class Tab(val label: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(viewModel: RecorderViewModel) {
+fun MainScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
     var tab by remember { mutableStateOf(Tab.LIVE) }
     val snackbar = remember { SnackbarHostState() }
     val status by viewModel.status.collectAsState()
@@ -151,7 +173,7 @@ fun MainScreen(viewModel: RecorderViewModel) {
                 Tab.ASK -> ChatPanel(viewModel, compact = false)
                 Tab.FLAGGED -> FlaggedList(viewModel)
                 Tab.DRAFTS -> DraftList(viewModel)
-                Tab.SETTINGS -> SettingsScreen(viewModel)
+                Tab.SETTINGS -> SettingsScreen(viewModel, onRunSetup)
             }
         }
     }

@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.dp
 import com.recorder.core.llm.ProviderIds
 
 @Composable
-fun SettingsScreen(viewModel: RecorderViewModel) {
+fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
     val triggers by viewModel.triggerKeywords.collectAsState()
     val activeProvider by viewModel.activeProvider.collectAsState()
     val heavyEnabled by viewModel.heavyTierEnabled.collectAsState()
@@ -182,6 +182,15 @@ fun SettingsScreen(viewModel: RecorderViewModel) {
                     googleRefreshToken = ""
                 },
             ) { Text("Save Google credentials") }
+        }
+
+        Section("Setup") {
+            Text(
+                "Re-run the setup wizard to download or remove models, redo permissions, or " +
+                    "walk through the cover-screen settings again.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(onClick = onRunSetup) { Text("Run setup again") }
         }
 
         Section("This device") {

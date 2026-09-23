@@ -59,6 +59,10 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     val heavyTierEnabled: StateFlow<Boolean> =
         settings.heavyTierEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    /** Null until read, so the UI does not flash the wizard at a configured phone. */
+    val setupComplete: StateFlow<Boolean?> =
+        settings.setupComplete.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     private val _chat = MutableStateFlow<List<ChatTurn>>(emptyList())
     val chat: StateFlow<List<ChatTurn>> = _chat.asStateFlow()
 
