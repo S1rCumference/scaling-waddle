@@ -61,6 +61,30 @@ jobs:
       - name: Build debug APKs
         run: ./gradlew --no-daemon :app:assembleDebug
 
+      # A green build is not proof the runtimes survived packaging: the ABI excludes that
+      # resolve the duplicate libonnxruntime.so could just as easily drop too much, and
+      # the failure mode on the phone is a silent "no transcription".
+      - name: Verify the APK carries both native runtimes
+        run: |
+          APK="$(ls app/build/outputs/apk/razr/debug/*.apk | head -1)"
+          echo "APK: $APK ($(du -h "$APK" | cut -f1))"
+          LIBS="$(unzip -l "$APK" | grep -oE 'lib/[^/]+/[^ ]+\.so' | sort -u)"
+          echo "$LIBS"
+
+          for required in libsherpa-onnx-jni.so libonnxruntime.so libllama.so libai-chat.so; do
+            echo "$LIBS" | grep -q "/$required$" || {
+              echo "::error::$required is missing from the APK"
+              exit 1
+            }
+          done
+
+          OTHER="$(echo "$LIBS" | grep -v '^lib/arm64-v8a/' || true)"
+          if [ -n "$OTHER" ]; then
+            echo "::error::non-arm64 native libraries were packaged: $OTHER"
+            exit 1
+          fi
+          echo "OK: both runtimes present, arm64 only"
+
       - name: Upload razr APK
         uses: actions/upload-artifact@v4
         with:
