@@ -1,130 +1,103 @@
-# Always-On Local Recorder
+# Recorder
 
-An Android app for a phone whose only job is to listen. It records continuously,
-transcribes on-device, flags what you told it to care about, files everything into
-folders, and lets you ask questions about your own day — with the radio off.
+A phone whose only job is to listen. It records continuously, transcribes on the device,
+flags the things you told it to care about, files them into folders, and answers questions
+about your own day with the radio off.
 
-**Raw audio never leaves the device.** There is no cloud speech-to-text, no upload path
-for PCM, and nothing outside `core-audio` / `core-asr` can even see the audio buffers.
-The optional heavy tier sends *text only*, only when you switch it on, and only to the
-provider you configured.
+**→ [Install it from the phone's browser](https://s1rcumference.github.io/scaling-waddle/)**
 
-Built for a Motorola Razr 2025 (Dimensity 7400X, 8 GB RAM) with no SIM in it, but the
-model tiers are chosen from the RAM actually present, so the same APK scales up on a
-bigger phone without a rewrite.
+No computer is needed to install, set up, or update it. No Play Store, no account, no
+subscription.
 
 ---
 
-## Release signing (one-time, needed before a tagged release can publish)
+## The two rules the code enforces
 
-Every build must be signed with the *same* key, or installing a new version over an old
-one fails with a signature mismatch. Run these on any computer with the JDK installed
-(`keytool` ships with it), then paste the four values into the repo's secrets.
+1. **Recordings never leave the phone.** Speech becomes text using this phone's processor.
+   Only `core-audio` and `core-asr` ever see audio samples; nothing downstream receives them,
+   and the network layer only ever handles strings. There is no cloud transcription.
+2. **Nothing outbound sends itself.** A connector tool marked `outbound` cannot be executed by
+   a model at all — it writes a draft to `pending_actions` and the model is told a draft was
+   queued. The only path to sending is a human tapping Approve.
 
-```bash
-# 1. Generate the keystore. Use a long passphrase and keep this file safe:
-#    lose it and you cannot update an installed app ever again, only uninstall and reinstall.
-keytool -genkeypair -v \
-  -keystore release.keystore \
-  -alias recorder \
-  -keyalg RSA -keysize 4096 -validity 10000 \
-  -storetype PKCS12 \
-  -dname "CN=Local Recorder, O=Personal, C=US"
+The heavy tier (Claude, OpenAI, Gemini, or your own server) is **off by default**, sends text
+only, and no API key is ever baked into a build.
 
-# 2. Print the base64 of the keystore (single line, no wrapping).
-base64 -w0 release.keystore    # macOS: base64 -i release.keystore | tr -d '\n'
-```
+## Target device
 
-Then in GitHub: **Settings → Secrets and variables → Actions → New repository secret**, and
-add four secrets:
+Motorola Razr+ 2025 — Snapdragon 8s Gen 3, 12 GB RAM, Android 15, 4,000 mAh, 4.0in
+1272×1080 cover screen. No SIM, no Google account.
 
-| Secret | Value |
+It also runs on other phones: 8 GB and 16 GB+ RAM tiers are supported and chosen at runtime,
+and a `standard` build without the cover-screen UI exists for non-flip phones. Android 8 is
+the floor for recording; the on-device assistant needs Android 11 (see Limitations).
+
+## Installing, on the phone
+
+1. Open **[the install page](https://s1rcumference.github.io/scaling-waddle/)** in the phone's
+   browser and tap **Download for Razr**.
+2. Tap **Open** when it finishes. Android will refuse to install from an unknown source: tap
+   **Settings**, turn on **Allow from this source**, press back, tap **Install**.
+3. Open the app. The wizard covers permissions, downloads the speech models over Wi-Fi
+   (about 460 MB, once), walks you through the cover-screen setting, and ends with a test.
+
+The most reliable setup — where recording restarts by itself after a reboot — is the
+device-owner QR path on a factory-reset phone, also on the install page. It is optional.
+
+### What you have to do yourself
+
+| Thing | Why it is not automatic |
 |---|---|
-| `KEYSTORE_BASE64` | the single-line base64 from step 2 |
-| `KEYSTORE_PASSWORD` | the keystore passphrase from step 1 |
-| `KEY_ALIAS` | `recorder` |
-| `KEY_PASSWORD` | the key passphrase (the same one, unless you set a separate one) |
+| Add four signing secrets | `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. Commands are in [Release signing](#release-signing). Until these exist, tagging a release fails and there is nothing for the install page to link to. |
+| Enable GitHub Pages | Settings → Pages → Source: **GitHub Actions**. Until then the install page is not published. |
+| Run the benchmark and battery test | They need the phone. The tables below are empty for that reason. |
 
-Back up `release.keystore` somewhere off the computer. It is the only thing that lets a
-future build update an installed app.
+## What it does
 
-To cut a release once the secrets exist:
+- **Live** — the transcript as it lands.
+- **Ask** — questions answered from your own transcripts by the on-device model. Works in
+  airplane mode: an FTS search pulls the relevant lines and only those go to the model.
+- **Flagged** — every hit on a trigger phrase. Defaults: *business idea, remind me, follow up,
+  email this, meeting*. Editable.
+- **Drafts** — anything the heavy tier wants to send. Approve or discard.
+- **Settings** — setup status, models, benchmark, power report, provider and key, connectors,
+  lockdown, and reboot behaviour.
 
-```bash
-git tag v0.2.0 && git push origin v0.2.0
-```
+Close the phone and the cover screen shows the live transcript and the same offline chat.
 
-That builds both flavours signed, verifies the signatures, writes `SHA256SUMS`, and
-publishes them as a GitHub Release. `versionCode` is derived from the tag
-(`0.2.0` → `200`), so the in-app updater can compare versions.
+## Measured numbers
 
-## Getting an APK on the phone
+Both tables are empty because neither can be produced without the phone. Filling them in is
+the last step of bring-up.
 
-You do not need Android Studio or a local SDK. Every push builds installable APKs in CI.
+### Battery
 
-1. Open the repo's **Actions** tab → the newest **Build APK** run.
-2. Download the artifact:
-   - `recorder-razr-debug` — flip phones, includes the cover-screen UI.
-   - `recorder-standard-debug` — everything else, no cover-screen UI.
-3. Unzip it and install:
+Procedure: charge to 100%, unplug, use the phone normally for a full day with the recorder
+running, then read Settings → **Power report**.
 
-```bash
-adb install -r -g app-razr-debug.apk
-```
-
-Or build locally if you do have the SDK:
-
-```bash
-./gradlew assembleRazrDebug        # app/build/outputs/apk/razr/debug/
-./gradlew installRazrDebug         # build and install in one step
-```
-
-## First run, in order
-
-```bash
-# 1. Confirm the phone is there and is what you think it is
-adb devices
-adb shell getprop ro.product.model
-adb shell cat /proc/meminfo | grep MemTotal
-
-# 2. Install, lock the phone down, and start recording — one command
-./scripts/setup_new_device.sh --apk app-razr-debug.apk
-
-# 3. Push the on-device models (see "Models" below)
-./scripts/fetch_models.sh --sherpa --vad --asr
-```
-
-Open the app once and accept the microphone prompt. After that it survives reboots,
-app updates, and having the app swiped away.
-
-## Models
-
-The APK ships with no model weights — they are large, they have their own licences, and
-they move faster than this code does. What you get without them is an app that records,
-segments speech, and stores nothing but empty transcripts. What you get with them is the
-real thing.
-
-| What | Where it goes | Fetched by |
+| Measurement | Target | Actual |
 |---|---|---|
-| Silero VAD (`silero_vad.onnx`) | app storage `files/models/` | `fetch_models.sh --vad` |
-| Parakeet-TDT INT8 (encoder/decoder/joiner/tokens) | `files/models/asr/` | `fetch_models.sh --asr` |
-| sherpa-onnx Android AAR | `core-asr/libs/` (build time) | `fetch_models.sh --sherpa` |
-| llama.cpp Android AAR | `core-llm/libs/` (build time) | `fetch_models.sh --llama` |
-| GGUF chat models | `files/models/llm/` | `fetch_models.sh --llm x.gguf` |
+| Microphone uptime | ~16 h | |
+| Speech as share of uptime | 5–15% typical | |
+| Decoder CPU seconds per hour | | |
+| Decoder duty cycle | < 5% | |
+| Battery drain per hour | ~6%/h for a 16 h day | |
+| Model loads / unloads | low; high means thrashing | |
 
-Both AARs are build-time drop-ins: the modules detect them and compile the real engine in.
-Without them the app still builds and runs — `AsrEngineFactory` hands back a no-op engine
-and the local chat says so plainly, rather than pretending.
+### Local models
 
-The app looks for these GGUF filenames, largest first, and picks the biggest one that
-fits in memory *at that moment*:
+Procedure: install a model in the wizard, then Settings → **Run benchmark**. It loads the
+model, runs the llama.cpp benchmark, and unloads.
 
-- Small tier (Phase 2 chat): `phi-4-mini-q4.gguf`, `qwen3-1.7b-q4.gguf`, `gemma-3-1b-q4.gguf`
-- Heavy tier: `gemma-3-4b-q4.gguf` (12 GB phones), `qwen3-8b-q4.gguf` (16 GB+)
+| Model | Size | Load time | Prompt tok/s | Gen tok/s | Peak RSS |
+|---|---|---|---|---|---|
+| Qwen 3 1.7B Q4_K_M | 1.03 GB | | | | |
+| Phi-4-mini Q4_K_M | 2.32 GB | | | | |
+| Qwen 3 4B Q4_K_M | 2.33 GB | | | | |
+| Qwen 3 8B Q4_K_M | 4.68 GB | | | | |
 
-On an 8 GB Razr the heavy local tier correctly reports itself unavailable instead of
-loading something that will be OOM-killed next to the ASR pipeline. Settings → *This
-device* shows the detected RAM tier and the exact reason.
+The open question worth answering first: **can this 12 GB phone hold the 8B instead of the
+4B** with the ASR pipeline resident? The tier table assumes not.
 
 ## How it fits together
 
@@ -132,12 +105,12 @@ device* shows the detected RAM tier and the exact reason.
 mic ─► AudioCapture ─► VAD ─► SpeechSegmenter ─► AsrEngine ─► Room
         (core-audio)                              (core-asr)   (core-storage)
                                                                   │
-                              KeywordWatcher ◄────────────────────┤
-                              FolderClassifier ◄──────────────────┤  local model
-                              HeavySyncWorker ◄───────────────────┘  (WorkManager,
-                                    │                                 charging + idle)
+                              KeywordWatcher ◄────────────────────┤  substring only
+                              FolderFilingWorker ◄────────────────┤  batched, charging+idle
+                              HeavySyncWorker ◄───────────────────┘  charging+idle
+                                    │
                                     ▼
-                              LlmProvider ──► Claude / OpenAI / Gemini / local server
+                              LlmProvider ──► Claude / OpenAI / Gemini / local
                                     │
                                     ▼
                               ConnectorToolGateway ──► drafts only ──► your approval
@@ -145,97 +118,156 @@ mic ─► AudioCapture ─► VAD ─► SpeechSegmenter ─► AsrEngine ─�
 
 | Module | What lives there |
 |---|---|
-| `core-audio` | Continuous `AudioRecord`, Silero VAD (ONNX Runtime) with an energy-gate fallback, pre-roll/hangover segmenter |
-| `core-asr` | `AsrEngine` interface; sherpa-onnx Parakeet engine compiled in when its AAR is present |
-| `core-storage` | Room: `transcript_segments` (+ FTS mirror), `folders`, `flagged_items`, `pending_actions`; DataStore settings |
-| `core-llm` | One `LlmProvider` interface over Claude / OpenAI-compatible / Gemini / on-device; RAM tiering; FTS-backed RAG |
+| `core-audio` | Continuous `AudioRecord`, Silero VAD via ONNX Runtime with an energy fallback, pre-roll/hangover segmenter |
+| `core-asr` | `AsrEngine` seam; sherpa-onnx Parakeet engine |
+| `core-storage` | Room: transcripts (+FTS), folders, flagged items, pending actions; DataStore settings |
+| `core-llm` | One `LlmProvider` over Claude / OpenAI-compatible / Gemini / on-device; RAM tiering; llama.cpp |
 | `core-connectors` | Gmail, Calendar, Drive; the draft-only gateway |
-| `app` | `RecordingService`, boot receiver, keyword tagging, Compose UI, cover screen, `HeavySyncWorker` |
+| `app` | `RecordingService`, boot and watchdog recovery, cover screen, wizard, updater, lockdown |
 
-### The two rules the code enforces
+Recording is decoupled from the UI by design: `RecordingService` never learns about the hinge
+or which display is active. Fold state is read only by the UI.
 
-1. **Audio stays put.** Only `core-audio` and `core-asr` touch sample buffers. Nothing
-   downstream receives them; the network layer only ever sees strings.
-2. **Nothing sends itself.** A connector tool marked `outbound = true` cannot be executed
-   by the model at all. It writes a row to `pending_actions` and the model is told a draft
-   was queued. `ConnectorToolGateway.approve()` is the only path to actually sending, and
-   it is called from a button.
+## Troubleshooting
 
-### Recording is decoupled from everything
+**Nothing is transcribed, but the notification says it is listening.**
+Settings → *This device*. If speech recognition says "model not downloaded", re-run setup.
+Recording without the model produces no text by design rather than failing loudly.
 
-`RecordingService` never learns about the hinge, the display, or which activity is
-foreground. Fold state is read by the UI only (`DevicePosture`). Opening or closing the
-phone cannot restart, pause, or interrupt recording — closing it just means a different
-activity is drawing.
+**Recording did not come back after a reboot.**
+Expected unless the app is device owner. Android forbids starting a microphone service from
+the background: `RECORD_AUDIO` is a while-in-use permission, so the system treats a
+backgrounded app as not holding it, and **turning off battery optimisation does not change
+this**. Tap the "Recording is paused" notification, or use the device-owner QR path.
 
-## Using it
+**Closing the phone shows Motorola's home screen, not the transcript.**
+Motorola decides what may appear on the cover display, and no app can read that setting.
+Settings → Display → External display → App settings → Recorder → Allow on external display →
+Auto transition. Failing that, open *Recorder Cover* from the cover screen's app list.
 
-- **Live** — transcript as it lands, newest first.
-- **Ask** — questions answered from your own transcripts by the on-device model. Works
-  in airplane mode. FTS pulls the relevant lines, the model reads only those.
-- **Flagged** — every hit on a trigger phrase. Defaults: *business idea, remind me,
-  follow up, email this, meeting*. Editable in Settings.
-- **Drafts** — anything the heavy tier wants to send. Approve or discard.
-- **Settings** — triggers, provider + key, connectors, and what this device can run.
+**A model download failed or stalled.**
+Re-open setup and tap Try again — partial downloads resume rather than restarting. If it
+fails immediately, check free space: the wizard needs the file size plus headroom.
 
-On a Razr, close the phone and open **Recorder Cover** from the cover-screen app list:
-live transcript plus the same offline chat, on the outer display.
+**The assistant says it is unavailable.**
+Settings → *This device* gives the reason: no model installed, not enough free memory right
+now, or Android older than 11.
 
-## The heavy tier
+**Battery is draining faster than expected.**
+Settings → *Power report*. A decoder duty cycle far above a few percent means the VAD is
+opening on noise; raise the VAD threshold in Settings.
 
-Off by default, on every device. When you switch it on and enter a key, a `WorkManager`
-job runs on charging + idle (or immediately via *Sync now*), batches transcripts the
-tier hasn't seen, and gets back folder assignments and drafted actions.
+## Undoing everything
 
-Providers are one interface. Switching between Claude, OpenAI, Gemini, or your own
-OpenAI-compatible server is a settings change, never a code change — point the endpoint
-at `http://your-box:11434/v1/chat/completions` and it is a local server. Keys are stored
-in Keystore-backed encrypted preferences, never in DataStore or plain prefs.
+| To undo | How |
+|---|---|
+| The lockdown | Settings → *Lock down this phone* → **Undo lockdown**. Restores exactly the apps it suspended. |
+| Device owner | Settings → *Surviving a reboot* → **Remove device owner**. No factory reset needed. |
+| The adb provisioning | `adb shell pm enable <package>`, `adb shell am set-standby-bucket <pkg> active` |
+| Models, transcripts, keys | Uninstall the app. Everything lives in app-private storage and goes with it. |
+| Recording, temporarily | The toggle in the app's top bar. The watchdog respects a deliberate stop. |
 
-## Connectors
+## Release signing
 
-Gmail, Google Calendar and Google Drive, over REST with a refresh token held on the
-device. Reads run immediately; sends and event creation always become drafts.
-
-Adding your own connector is one interface and one registration call — see
-[docs/CONNECTORS.md](docs/CONNECTORS.md).
-
-## Provisioning other people
+Every build must be signed with the same key or updates cannot install over the top.
 
 ```bash
-./scripts/setup_new_device.sh                 # flip phone, cover UI
-./scripts/setup_new_device.sh --no-cover-ui   # normal phone, no cover UI
+keytool -genkeypair -v \
+  -keystore release.keystore \
+  -alias recorder \
+  -keyalg RSA -keysize 4096 -validity 10000 \
+  -storetype PKCS12 \
+  -dname "CN=Local Recorder, O=Personal, C=US"
+
+base64 -w0 release.keystore     # macOS: base64 -i release.keystore | tr -d '\n'
 ```
 
-`provision.sh` (called by the above, or run alone) disables the telephony stack — no SIM
-is ever going in these phones — freezes the Play Store, exempts the recorder from Doze,
-and pushes every other user app into the restricted standby bucket. All of it is
-reversible; the script prints how.
+Add these under **Settings → Secrets and variables → Actions**:
 
-**Keys for other people:** the heavy tier ships **disabled** for everyone, including you,
-and no key is baked into any build. Whoever holds the phone turns it on in Settings and
-enters their own key. Nobody's transcripts pass through anyone else's account, and a
-phone handed to your dad or an associate is fully functional — recording, transcription,
-tagging, and offline chat all work — without ever enabling it.
+| Secret | Value |
+|---|---|
+| `KEYSTORE_BASE64` | the single-line base64 above |
+| `KEYSTORE_PASSWORD` | the keystore passphrase |
+| `KEY_ALIAS` | `recorder` |
+| `KEY_PASSWORD` | the key passphrase |
 
-## Verifying it behaves
+Back up `release.keystore` off the machine — it is the only thing that lets a future build
+update an installed app. Then:
 
 ```bash
-adb shell dumpsys deviceidle whitelist | grep com.recorder.app   # exempt from Doze
-adb shell am get-standby-bucket com.recorder.app                 # should be active
-adb shell dumpsys activity services com.recorder.app             # RecordingService alive
-adb shell top -o %CPU -n 1                                       # only the recorder busy
-adb logcat -s RecordingService AsrEngineFactory LocalModelSelector
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
-To confirm nothing is talking to the network, put the phone in airplane mode: recording,
-transcription, tagging and the Ask tab all keep working.
+That builds both flavours signed, verifies the signatures, writes `SHA256SUMS`, publishes a
+GitHub Release, and republishes the install page with that build's digests and QR code.
 
-## Tests
+## Developing
 
 ```bash
-./gradlew test              # unit tests, all modules
-./gradlew assembleDebug     # both flavours
+./gradlew test                    # unit tests
+./scripts/ci/prepare_natives.sh   # fetch sherpa-onnx, build the llama.cpp AAR
+./gradlew :app:assembleRazrDebug
 ```
 
-CI runs both on every push and uploads the APKs.
+The debug build uses the `.debug` application id so it coexists with the release. Models can
+be side-loaded over adb instead of downloaded:
+
+```bash
+PKG=com.recorder.app.debug ./scripts/fetch_models.sh --vad --asr
+```
+
+`scripts/provision.sh` and `scripts/setup_new_device.sh` still work from a computer and remain
+the fallback for anything the in-app lockdown cannot do. See [docs/MODELS.md](docs/MODELS.md)
+[docs/CONNECTORS.md](docs/CONNECTORS.md), and [docs/BRING_UP.md](docs/BRING_UP.md) for the tap-by-tap first-run test script.
+
+### On-device verification
+
+```bash
+adb shell dumpsys deviceidle whitelist | grep com.recorder.app
+adb shell am get-standby-bucket com.recorder.app
+adb shell dumpsys activity services com.recorder.app
+adb shell top -o %CPU -n 1
+adb logcat -s RecordingService AsrEngineFactory LocalModelRuntime CoverPresenter
+
+# Reboot behaviour, including the Android 14+ restriction
+adb shell am compat enable FGS_BOOT_COMPLETED_RESTRICTIONS com.recorder.app
+adb reboot
+adb shell am kill com.recorder.app     # watchdog should recover it within the hour
+```
+
+## Limitations
+
+Stated plainly, because several matter.
+
+**Nothing in this app has run on a phone.** It builds, its logic is unit tested, and CI
+asserts both native runtimes are in the APK — but no line of it has executed on Android.
+First-run bugs are likely.
+
+**Device-specific behaviour is unverified.** Whether Motorola's cover-screen transition works
+as described, what the Razr's display ids actually are, and whether `climanager` behaves as
+the community reports — all need the phone. Settings dumps the real display list so those
+answers can be read off the device rather than guessed.
+
+**GGUF digests are missing.** Hugging Face stores the SHA-256 as the LFS `oid`, which the
+available interface does not expose, so the five chat models ship size-checked only. That
+catches truncated downloads, not substituted files. The VAD and ASR models do have verified
+digests.
+
+**Chat quality is capped by the binding.** ARM's llama.cpp wrapper exposes no thread count, no
+context size, and no explicit chat template, and its Kotlin is built with a newer compiler than
+this project, so `-Xskip-metadata-version-check` is in use. A purpose-built JNI wrapper would
+remove all three; the `LocalLlm` seam exists so that swap touches one file.
+
+**The assistant needs Android 11.** That wrapper's logging header uses an API 30 symbol. The
+recorder itself runs on Android 8; on older phones the assistant reports itself unavailable.
+
+**Shizuku is not integrated.** Its API has no public shell executor, so the lockdown needs
+device owner. Without it, `provision.sh` from a computer is the path.
+
+**32-bit phones are excluded.** The APK is arm64 only; two native runtimes at ~24 MB per ABI
+made four-ABI builds indefensible.
+
+**Battery and model numbers are unmeasured**, as above.
+
+**Untested at scale.** Nothing has run for a full day, so database growth, FTS performance
+after months of transcripts, and thermal behaviour during long decoding are unknown.
