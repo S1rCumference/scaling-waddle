@@ -66,15 +66,48 @@ SDKMANAGER="$(
 [ -x "${SDKMANAGER:-}" ] || { echo "ERROR: sdkmanager not found under $ANDROID_HOME" >&2; exit 1; }
 echo "sdkmanager: $SDKMANAGER"
 
-log "Installing NDK and CMake pinned by llama.android"
-# Versions come from lib/build.gradle.kts at the pinned commit; if the exact CMake is not
-# offered by this SDK channel we drop the pin below and let AGP pick what is installed.
-yes | "$SDKMANAGER" --install "platforms;android-36" "ndk;29.0.13113456" >/dev/null || {
-  echo "ERROR: could not install the NDK llama.android pins." >&2
+sdk_install() {
+  local pkg="$1" out
+  out="$(mktemp)"
+  echo "  installing $pkg"
+  if (yes 2>/dev/null | "$SDKMANAGER" --install "$pkg") >"$out" 2>&1; then
+    rm -f "$out"
+    return 0
+  fi
+  echo "  FAILED: $pkg" >&2
+  tail -20 "$out" >&2
+  rm -f "$out"
+  return 1
+}
+
+# Newest locally installed component of a kind, e.g. newest_local ndk -> "29.0.13113456".
+newest_local() {
+  ls -1 "$ANDROID_HOME/$1" 2>/dev/null | sort -V | tail -1
+}
+
+log "Resolving NDK and CMake"
+# Prefer whatever the runner image already ships: the pinned versions are a multi-hundred
+# megabyte download, and llama.cpp is not fussy about the exact toolchain.
+NDK_VERSION="$(newest_local ndk)"
+if [ -z "$NDK_VERSION" ]; then
+  sdk_install "ndk;29.0.13113456" || true
+  NDK_VERSION="$(newest_local ndk)"
+fi
+[ -n "$NDK_VERSION" ] || { echo "ERROR: no NDK available and none could be installed" >&2; exit 1; }
+echo "  NDK: $NDK_VERSION"
+
+CMAKE_VERSION="$(newest_local cmake)"
+if [ -z "$CMAKE_VERSION" ]; then
+  sdk_install "cmake;3.31.6" || true
+  CMAKE_VERSION="$(newest_local cmake)"
+fi
+echo "  CMake: ${CMAKE_VERSION:-none installed, will use PATH}"
+
+# llama.android compiles against API 36.
+sdk_install "platforms;android-36" || {
+  echo "ERROR: could not install platforms;android-36, which llama.android compiles against." >&2
   exit 1
 }
-CMAKE_PINNED=1
-yes | "$SDKMANAGER" --install "cmake;3.31.6" >/dev/null 2>&1 || CMAKE_PINNED=0
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -97,14 +130,17 @@ sed -i 's/^\( *\)minSdk = 33$/\1minSdk = 26/' "$LIB_GRADLE"
 # Patch 2: drop x86_64. We ship arm64 only, and the native build is the slow part.
 sed -i "s/abiFilters += listOf(\"arm64-v8a\", \"x86_64\")/abiFilters += listOf(\"$ABI\")/" "$LIB_GRADLE"
 
-# Patch 3: only if the pinned CMake was unavailable, let AGP choose.
-if [ "$CMAKE_PINNED" = 0 ]; then
-  echo "Pinned CMake unavailable; removing the version pin"
+# Patch 3: point the toolchain pins at what this machine actually has, rather than
+# downloading upstream's exact versions.
+sed -i "s/^\( *\)ndkVersion = \".*\"$/\1ndkVersion = \"$NDK_VERSION\"/" "$LIB_GRADLE"
+if [ -n "$CMAKE_VERSION" ]; then
+  sed -i "s/version = \"3\.31\.6\"/version = \"$CMAKE_VERSION\"/" "$LIB_GRADLE"
+else
   sed -i '/version = "3.31.6"/d' "$LIB_GRADLE"
 fi
 
 echo "--- patched lib/build.gradle.kts ---"
-grep -nE 'minSdk|abiFilters|version = "3' "$LIB_GRADLE" || true
+grep -nE 'minSdk|abiFilters|ndkVersion|version = "3' "$LIB_GRADLE" || true
 
 # Verify the patches actually applied; a silent sed miss would mean a 33-minSdk AAR that
 # fails much later with a confusing manifest-merger error.
