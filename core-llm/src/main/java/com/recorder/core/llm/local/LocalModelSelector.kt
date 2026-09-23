@@ -22,23 +22,36 @@ data class LocalModelSpec(
  */
 class LocalModelSelector(private val context: Context) {
 
-    /** Phase 2's always-available chat model, largest first. */
+    /**
+     * The always-available chat model, largest first.
+     *
+     * Filenames and headroom figures match app/src/main/assets/models.json, whose sizes were
+     * read from the Hub rather than estimated. Headroom is roughly the file plus KV cache and
+     * runtime overhead, so a model that would be OOM-killed beside the ASR pipeline is never
+     * chosen.
+     */
     fun smallModelCandidates(): List<LocalModelSpec> {
         val dir = LocalModelRuntime.modelDir(context)
         return listOf(
-            spec("Phi-4-mini 3.8B (Q4)", "phi-4-mini-q4.gguf", 3_000, dir),
-            spec("Qwen 3 1.7B (Q4)", "qwen3-1.7b-q4.gguf", 1_600, dir),
-            spec("Gemma 3 1B (Q4)", "gemma-3-1b-q4.gguf", 1_100, dir),
+            // 2.49 GB on disk; only offered from the 12 GB tier upward.
+            spec("Phi-4-mini Instruct (Q4_K_M)", "phi-4-mini-q4.gguf", 3_400, dir),
+            // 1.11 GB — the sensible default on an 8 GB phone.
+            spec("Qwen 3 1.7B (Q4_K_M)", "qwen3-1.7b-q4.gguf", 1_700, dir),
+            // 0.81 GB — last resort when memory is tight.
+            spec("Gemma 3 1B Instruct (Q4_K_M)", "gemma-3-1b-q4.gguf", 1_300, dir),
         )
     }
 
-    /** Phase 4's heavy tier, gated on RAM tier rather than only on free memory. */
+    /** The heavy tier, gated on RAM tier rather than only on free memory. */
     fun heavyModelCandidate(): LocalModelSpec? {
         val dir = LocalModelRuntime.modelDir(context)
         return when (DeviceCapabilities.ramTier(context)) {
+            // Nothing heavy fits beside ASR and a chat model in 8 GB.
             RamTier.LOW_8GB -> null
-            RamTier.MID_12GB -> spec("Gemma 3 4B (Q4)", "gemma-3-4b-q4.gguf", 4_000, dir)
-            RamTier.HIGH_16GB_PLUS -> spec("Qwen 3 8B (Q4)", "qwen3-8b-q4.gguf", 6_500, dir)
+            // 2.50 GB. Whether the 8B fits here instead is for the benchmark to answer.
+            RamTier.MID_12GB -> spec("Qwen 3 4B (Q4_K_M)", "qwen3-4b-q4.gguf", 3_400, dir)
+            // 5.03 GB.
+            RamTier.HIGH_16GB_PLUS -> spec("Qwen 3 8B (Q4_K_M)", "qwen3-8b-q4.gguf", 6_600, dir)
         }
     }
 
@@ -81,7 +94,24 @@ class LocalModelSelector(private val context: Context) {
     private fun spec(label: String, fileName: String, requiredFreeMb: Long, dir: File) =
         LocalModelSpec(label, fileName, requiredFreeMb, File(dir, fileName).absolutePath)
 
-    private companion object {
-        const val TAG = "LocalModelSelector"
+    companion object {
+        private const val TAG = "LocalModelSelector"
+
+        /**
+         * The filenames this selector looks for on disk. The download manifest must write
+         * exactly these names, or a model downloads successfully and is then never found —
+         * a failure with no visible symptom beyond the assistant staying unavailable. A unit
+         * test asserts the manifest and this list agree.
+         */
+        val SMALL_MODEL_FILES = listOf(
+            "phi-4-mini-q4.gguf",
+            "qwen3-1.7b-q4.gguf",
+            "gemma-3-1b-q4.gguf",
+        )
+
+        val HEAVY_MODEL_FILES = listOf(
+            "qwen3-4b-q4.gguf",
+            "qwen3-8b-q4.gguf",
+        )
     }
 }

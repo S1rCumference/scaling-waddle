@@ -6,37 +6,65 @@ manifest that drives it.
 
 ## What ships in the manifest today
 
-| Model | Role | Size | Digest verified |
-|---|---|---|---|
-| Silero VAD v6.2.3 | voice activity detection | 2.2 MB | yes |
-| Parakeet TDT 0.6B v2 INT8 | speech recognition | 460 MB | yes |
+| Model | Role | Size | Tier | Licence | Digest verified |
+|---|---|---|---|---|---|
+| Silero VAD v6.2.3 | voice activity detection | 2.2 MB | all | MIT | yes |
+| Parakeet TDT 0.6B v2 INT8 | speech recognition | 460 MB | all | CC-BY-4.0 | yes |
+| Gemma 3 1B Instruct Q4_K_M | small chat | 769 MB | 8 GB+ | Gemma Terms | no |
+| Qwen 3 1.7B Q4_K_M | small chat | 1.03 GB | 8 GB+ | Apache-2.0 | no |
+| Phi-4-mini Instruct Q4_K_M | small chat | 2.32 GB | 12 GB+ | MIT | no |
+| Qwen 3 4B Q4_K_M | heavy | 2.33 GB | 12 GB+ | Apache-2.0 | no |
+| Qwen 3 8B Q4_K_M | heavy | 4.68 GB | 16 GB+ | Apache-2.0 | no |
 
-"Digest verified" means the SHA-256 in the manifest was produced by downloading that exact
-URL and hashing the bytes — not copied from a README. Both were verified this way:
+Every URL and byte size above was checked against the source, not copied from a README:
 
 ```
-silero_vad.onnx      2327524 bytes  1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
-parakeet …int8.tar.bz2 482468385 bytes  157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad
+silero_vad.onnx                   2,327,524  sha256 1a153a22…88e3
+parakeet …v2-int8.tar.bz2       482,468,385  sha256 157c157b…e1ad
+gemma-3-1b-it-Q4_K_M.gguf       806,058,272  size verified, no digest
+Qwen3-1.7B-Q4_K_M.gguf        1,107,409,472  size verified, no digest
+Phi-4-mini-instruct-Q4_K_M.gguf 2,491,874,272  size verified, no digest
+Qwen3-4B-Q4_K_M.gguf          2,497,280,256  size verified, no digest
+Qwen3-8B-Q4_K_M.gguf          5,027,783,488  size verified, no digest
 ```
 
-## Why there are no chat models yet
+### Why the GGUF entries have no digest
 
-The on-device chat model and the local heavy tier are absent from the manifest. Every
-practical GGUF build lives on huggingface.co, which the build environment's network policy
-blocks, so neither the URLs nor the digests could be verified.
+Hugging Face stores these as LFS objects whose SHA-256 is the LFS `oid`, but that value is
+not exposed by the Hub interface available here, and computing it means downloading between
+0.8 and 5 GB per model. So those entries ship `sha256: null` and `hashVerified: false`.
 
-The two bad options were shipping invented digests (every install fails verification) or
-shipping no digests (no integrity checking on the largest downloads, over phone Wi-Fi, where
-truncation is the most likely failure). Neither is acceptable, so those entries wait until
-the URLs can be checked.
+What that costs, precisely:
 
-**Nothing else is blocked by this.** Recording, voice activity detection, transcription,
-keyword flagging and folder assignment all work. Settings → *This device* reports the local
-AI as unavailable with the reason, and the wizard says the same on its final step.
+- **Truncated or interrupted downloads are still caught.** The byte size is exact, and the
+  installer refuses a file of the wrong length. This is the failure that actually happens on
+  phone Wi-Fi.
+- **A substituted file would not be caught.** Nothing here defends against a compromised
+  mirror. The download is HTTPS from huggingface.co, and that is the whole of the guarantee.
 
-To unblock: allow `huggingface.co` in the environment's network settings, then the manifest
-gains verified entries for the candidates in Phase 6 (Phi-4-mini, Qwen3 1.7B/4B/8B,
-Gemma 3 1B/4B), each with a measured size and digest.
+The UI says so on the download screen rather than implying a verification that did not happen.
+To add a digest later, download the file on a machine that can reach the Hub and run
+`sha256sum`, then fill in `sha256` and set `hashVerified: true`.
+
+### Which model a phone is offered
+
+Tiering comes from `DeviceCapabilities.marketedRamGb`, which snaps the kernel's reported
+memory to the size the phone is sold as — a 12 GB phone reports 10.5 to 11.6 GiB, and a raw
+threshold used to drop it into the 8 GB tier.
+
+| Phone | Small chat | Heavy |
+|---|---|---|
+| 8 GB | Qwen 3 1.7B | none — nothing heavy fits beside ASR |
+| 12 GB (this Razr+) | Phi-4-mini | Qwen 3 4B |
+| 16 GB+ | Phi-4-mini | Qwen 3 8B |
+
+Whether a 12 GB phone can actually hold the 8B instead of the 4B is a question for the
+on-device benchmark (Settings → Benchmark), not a guess made here.
+
+`app/src/test/java/com/recorder/app/models/ModelCatalogTest.kt` asserts the manifest filenames
+match the names `LocalModelSelector` looks for. Without that, a renamed file downloads
+successfully and is then never found, and the only symptom is an assistant that stays
+unavailable.
 
 ## Adding a model by hand
 

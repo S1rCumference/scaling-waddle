@@ -1,5 +1,6 @@
 package com.recorder.app.models
 
+import com.recorder.core.llm.local.LocalModelSelector
 import com.recorder.core.llm.local.RamTier
 import java.io.File
 import org.junit.Assert.assertEquals
@@ -79,6 +80,61 @@ class ModelCatalogTest {
         val low = ModelCatalog.recommended(shipped, RamTier.LOW_8GB).size
         val high = ModelCatalog.recommended(shipped, RamTier.HIGH_16GB_PLUS).size
         assertTrue("16GB tier offered $high, 8GB tier offered $low", high >= low)
+    }
+
+    /**
+     * The quiet failure this guards against: a manifest filename that the selector does not
+     * look for. The download succeeds, the file lands on disk, and the assistant stays
+     * unavailable forever with no error anywhere.
+     */
+    @Test
+    fun `chat model filenames match what the selector looks for`() {
+        val manifestSmall = shipped.filter { it.role == ModelRole.SMALL_CHAT }.map { it.fileName }
+        val manifestHeavy = shipped.filter { it.role == ModelRole.HEAVY }.map { it.fileName }
+
+        assertEquals(
+            LocalModelSelector.SMALL_MODEL_FILES.sorted(),
+            manifestSmall.sorted(),
+        )
+        assertEquals(
+            LocalModelSelector.HEAVY_MODEL_FILES.sorted(),
+            manifestHeavy.sorted(),
+        )
+    }
+
+    @Test
+    fun `an 8GB phone is offered a chat model but no heavy one`() {
+        val picked = ModelCatalog.recommended(shipped, RamTier.LOW_8GB)
+        assertTrue(
+            "an 8GB phone should still get a small chat model",
+            picked.any { it.role == ModelRole.SMALL_CHAT },
+        )
+        assertTrue(
+            "nothing heavy fits in 8GB beside ASR and a chat model",
+            picked.none { it.role == ModelRole.HEAVY },
+        )
+    }
+
+    @Test
+    fun `a 12GB phone gets both a chat model and a heavy one`() {
+        val picked = ModelCatalog.recommended(shipped, RamTier.MID_12GB)
+        assertEquals(
+            "phi-4-mini-q4.gguf",
+            picked.first { it.role == ModelRole.SMALL_CHAT }.fileName,
+        )
+        assertEquals(
+            "qwen3-4b-q4.gguf",
+            picked.first { it.role == ModelRole.HEAVY }.fileName,
+        )
+    }
+
+    @Test
+    fun `a 16GB phone gets the largest heavy model`() {
+        val picked = ModelCatalog.recommended(shipped, RamTier.HIGH_16GB_PLUS)
+        assertEquals(
+            "qwen3-8b-q4.gguf",
+            picked.first { it.role == ModelRole.HEAVY }.fileName,
+        )
     }
 
     @Test
