@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# build_install_page.sh — render web/index.html into _site for GitHub Pages.
+#
+# Two modes:
+#   with a dist directory (a release build): real file sizes, real SHA-256 digests, and a
+#   device-owner provisioning QR generated from the APK's actual signing certificate;
+#   without one: the page still builds, pointing at releases/latest/download/… so the links
+#   keep working for every future release, with the QR section replaced by a note.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$REPO_ROOT"
+
+OWNER="${GITHUB_REPOSITORY_OWNER:-unknown}"
+REPO="${GITHUB_REPOSITORY##*/}"
+REPO="${REPO:-scaling-waddle}"
+COMMIT="${GITHUB_SHA:-local}"
+VERSION="${VERSION_NAME:-latest}"
+DIST="${1:-}"
+
+OUT="_site"
+rm -rf "$OUT" && mkdir -p "$OUT"
+
+BASE="https://github.com/$OWNER/$REPO/releases/latest/download"
+RAZR_URL="$BASE/recorder-razr-release.apk"
+STANDARD_URL="$BASE/recorder-standard-release.apk"
+CHECKSUMS_URL="$BASE/SHA256SUMS"
+
+human_size() {
+  local bytes="$1"
+  awk -v b="$bytes" 'BEGIN { printf "%.0f MB", b / 1048576 }'
+}
+
+RAZR_SIZE="about 35 MB"
+STANDARD_SIZE="about 35 MB"
+RAZR_SHA="Published in SHA256SUMS with each release."
+STANDARD_SHA="Published in SHA256SUMS with each release."
+QR_SECTION=""
+
+if [ -n "$DIST" ] && [ -d "$DIST" ]; then
+  echo "Rendering with release artifacts from $DIST"
+
+  razr_apk="$DIST/recorder-razr-release.apk"
+  std_apk="$DIST/recorder-standard-release.apk"
+
+  [ -f "$razr_apk" ] && RAZR_SIZE="$(human_size "$(stat -c%s "$razr_apk")")"
+  [ -f "$std_apk" ] && STANDARD_SIZE="$(human_size "$(stat -c%s "$std_apk")")"
+  [ -f "$razr_apk" ] && RAZR_SHA="$(sha256sum "$razr_apk" | cut -d' ' -f1)"
+  [ -f "$std_apk" ] && STANDARD_SHA="$(sha256sum "$std_apk" | cut -d' ' -f1)"
+
+  # --- Device-owner provisioning QR -------------------------------------------------
+  # The signature checksum must be the SHA-256 of the signing certificate, encoded
+  # base64url without padding. Hex, standard base64, or a digest of the APK instead of
+  # the certificate all fail silently during setup, which is impossible to debug on a
+  # phone mid-provisioning, so it is derived from the APK rather than typed by hand.
+  APKSIGNER="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name apksigner 2>/dev/null | sort -V | tail -1 || true)"
+
+  if [ -n "$APKSIGNER" ] && [ -f "$razr_apk" ]; then
+    CERT_HEX="$(
+      "$APKSIGNER" verify --print-certs "$razr_apk" |
+        grep -i 'certificate SHA-256 digest' | head -1 |
+        sed 's/.*: *//' | tr -d ' \r\n'
+    )"
+
+    if [ -n "$CERT_HEX" ]; then
+      CERT_B64URL="$(
+        python3 - "$CERT_HEX" <<'PY'
+import base64, binascii, sys
+raw = binascii.unhexlify(sys.argv[1].strip())
+print(base64.urlsafe_b64encode(raw).decode().rstrip("="))
+PY
+      )"
+
+      cat > "$OUT/provisioning.json" <<JSON
+{
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": "com.recorder.app/com.recorder.app.admin.RecorderDeviceAdminReceiver",
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": "$RAZR_URL",
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM": "$CERT_B64URL",
+  "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": true,
+  "android.app.extra.PROVISIONING_SKIP_ENCRYPTION": false
+}
+JSON
+
+      python3 -m pip install --quiet 'qrcode[pil]' >/dev/null 2>&1 || true
+      if python3 - "$OUT/provisioning.json" "$OUT/provisioning-qr.png" <<'PY'
+import json, sys
+try:
+    import qrcode
+except ImportError:
+    sys.exit(1)
+payload = json.dumps(json.load(open(sys.argv[1])), separators=(",", ":"))
+img = qrcode.make(payload, box_size=8, border=2)
+img.save(sys.argv[2])
+PY
+      then
+        QR_SECTION=$(cat <<'HTML'
+<h2>Fresh phone setup (most reliable)</h2>
+<p>
+  This path makes the recorder the phone's <em>device owner</em>, which is the only way
+  Android lets recording restart by itself after a reboot. Without it, you tap a
+  notification once after each restart.
+</p>
+<p>It only works on a phone with no accounts signed in, so it means factory resetting first.</p>
+<ol>
+  <li>On the phone: <span class="tap">Settings → System → Reset → Erase all data</span>.</li>
+  <li>On the welcome screen after it restarts, tap the <strong>same spot six times</strong>.
+    A QR scanner opens.</li>
+  <li>Connect to Wi-Fi when asked.</li>
+  <li>Scan the code below from another screen — a laptop, a tablet, or someone else's phone
+    showing this page.</li>
+  <li>The phone downloads and installs the app itself, then runs the setup wizard.</li>
+</ol>
+<div class="qr"><img src="provisioning-qr.png" alt="Device owner provisioning QR code"></div>
+<p class="lede">
+  Device owner is reversible: Settings → Surviving a reboot → Remove device owner, with no
+  second factory reset. The exact contents of this code are in
+  <a href="provisioning.json">provisioning.json</a>.
+</p>
+HTML
+)
+      else
+        echo "QR library unavailable; skipping the QR section"
+      fi
+    fi
+  fi
+fi
+
+if [ -z "$QR_SECTION" ]; then
+  QR_SECTION=$(cat <<'HTML'
+<h2>Fresh phone setup</h2>
+<p class="lede">
+  The device-owner QR code is generated when a signed release is published, because it has to
+  carry that build's signing certificate. Once a release exists, this section becomes the
+  factory-reset setup path.
+</p>
+HTML
+)
+fi
+
+python3 - "$OUT/index.html" <<PY
+import pathlib
+html = pathlib.Path("web/index.html").read_text()
+replacements = {
+    "__RAZR_URL__": """$RAZR_URL""",
+    "__STANDARD_URL__": """$STANDARD_URL""",
+    "__CHECKSUMS_URL__": """$CHECKSUMS_URL""",
+    "__RAZR_SIZE__": """$RAZR_SIZE""",
+    "__STANDARD_SIZE__": """$STANDARD_SIZE""",
+    "__RAZR_SHA__": """$RAZR_SHA""",
+    "__STANDARD_SHA__": """$STANDARD_SHA""",
+    "__VERSION__": """$VERSION""",
+    "__OWNER__": """$OWNER""",
+    "__REPO__": """$REPO""",
+    "__COMMIT__": """${COMMIT:0:12}""",
+    "__QR_SECTION__": '''$QR_SECTION''',
+}
+for key, value in replacements.items():
+    html = html.replace(key, value)
+
+missing = [line for line in html.splitlines() if "__" in line and "_site" not in line]
+if any("__" + t + "__" in html for t in ["RAZR_URL", "STANDARD_URL", "QR_SECTION", "VERSION"]):
+    raise SystemExit("a placeholder was left unreplaced")
+
+pathlib.Path("$OUT/index.html").write_text(html)
+print("wrote $OUT/index.html")
+PY
+
+# A .nojekyll file stops Pages trying to process this as a Jekyll site.
+touch "$OUT/.nojekyll"
+ls -la "$OUT"

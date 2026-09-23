@@ -20,3 +20,4 @@ core-llm/libs/*.aar
 core-llm/libs/*.jar
 core-asr/libs/*.jar
 .models/
+_site/

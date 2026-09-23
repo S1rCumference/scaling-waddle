@@ -11,6 +11,10 @@ import com.recorder.core.llm.local.LocalModelRuntime
 import androidx.lifecycle.viewModelScope
 import com.recorder.app.ServiceLocator
 import com.recorder.app.service.PowerMetrics
+import com.recorder.app.ui.setup.SetupCheck
+import com.recorder.app.ui.setup.SetupStatus
+import com.recorder.app.update.AvailableUpdate
+import com.recorder.app.update.UpdateChecker
 import com.recorder.app.service.RecordingService
 import com.recorder.app.work.HeavySyncScheduler
 import com.recorder.core.connectors.RefreshTokenGoogleAuth
@@ -169,6 +173,54 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
             onSuccess = { "Device owner removed. Recording will need a tap after a reboot." },
             onFailure = { "Could not remove device owner: ${it.message}" },
         )
+    }
+
+    /** Live setup checks, re-read each time rather than remembered from the wizard. */
+    fun setupChecks(): List<SetupCheck> = SetupStatus.check(getApplication())
+
+    private val updateChecker by lazy { UpdateChecker(getApplication<Application>()) }
+
+    private val _update = MutableStateFlow<String?>(null)
+    val update: StateFlow<String?> = _update.asStateFlow()
+
+    private var pendingUpdate: AvailableUpdate? = null
+
+    fun checkForUpdate() {
+        _update.value = "Checking…"
+        viewModelScope.launch {
+            updateChecker.check().fold(
+                onSuccess = { available ->
+                    pendingUpdate = available
+                    _update.value = when (available) {
+                        null -> "You are on the latest version."
+                        else -> "Version ${available.versionName} is available " +
+                            "(${available.sizeBytes / (1024 * 1024)} MB). Tap download to install it."
+                    }
+                },
+                onFailure = { _update.value = "Could not check: ${it.message}" },
+            )
+        }
+    }
+
+    val updateAvailable: Boolean get() = pendingUpdate != null
+
+    fun downloadUpdate() {
+        val target = pendingUpdate ?: return
+        _update.value = "Downloading ${target.versionName}…"
+        viewModelScope.launch {
+            updateChecker.download(target) { written, total ->
+                if (total > 0) {
+                    _update.value = "Downloading ${target.versionName}: " +
+                        "${written / (1024 * 1024)} / ${total / (1024 * 1024)} MB"
+                }
+            }.fold(
+                onSuccess = { file ->
+                    _update.value = "Downloaded. Confirm the install when Android asks."
+                    updateChecker.install(file)
+                },
+                onFailure = { _update.value = "Download failed: ${it.message}" },
+            )
+        }
     }
 
     private val _benchmark = MutableStateFlow<String?>(null)

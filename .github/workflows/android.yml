@@ -232,3 +232,53 @@ jobs:
         with:
           name: release-dist
           path: dist/
+
+  pages:
+    # Publishes the install page people download from. Runs after a release so it can embed
+    # that build's real digests and a provisioning QR generated from its signing
+    # certificate; also runnable by hand so the page exists before the first release.
+    needs: [release]
+    if: always() && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      # Best effort: present on a tagged run, absent on a manual one, and the page builder
+      # handles both.
+      - name: Fetch release artifacts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: release-dist
+          path: dist
+
+      - name: Build the install page
+        env:
+          VERSION_NAME: ${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}
+        run: |
+          if [ -d dist ]; then
+            ./scripts/ci/build_install_page.sh dist
+          else
+            ./scripts/ci/build_install_page.sh
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

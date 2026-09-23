@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import com.recorder.core.llm.ProviderIds
 
 @Composable
@@ -182,6 +183,51 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
                     googleRefreshToken = ""
                 },
             ) { Text("Save Google credentials") }
+        }
+
+        Section("Setup status") {
+            val context = LocalContext.current
+            // Recomputed on each recomposition on purpose: these can change behind the app's
+            // back, so a cached answer would be a lie.
+            viewModel.setupChecks().forEach { check ->
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Text(
+                        if (check.ok) "✓" else "✗",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(end = 10.dp),
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(check.label, style = MaterialTheme.typography.bodyMedium)
+                        Text(check.detail, style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (!check.ok) {
+                        check.fix?.let { fix ->
+                            TextButton(onClick = { fix(context) }) { Text(check.fixLabel) }
+                        }
+                    }
+                }
+            }
+        }
+
+        Section("Updates") {
+            val updateText by viewModel.update.collectAsState()
+            Text(
+                "Downloads the newest release from GitHub and hands it to Android to install. " +
+                    "Same signing key, so it installs over the top.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row {
+                Button(onClick = viewModel::checkForUpdate) { Text("Check for updates") }
+                if (viewModel.updateAvailable) {
+                    TextButton(onClick = viewModel::downloadUpdate) { Text("Download") }
+                }
+            }
+            updateText?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
+            }
         }
 
         Section("Setup") {

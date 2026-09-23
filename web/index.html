@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install Recorder</title>
+<style>
+  :root {
+    --bg: #0d0f12;
+    --card: #171a1f;
+    --line: #2a2f37;
+    --text: #f2f4f7;
+    --dim: #a2aab6;
+    --accent: #7fd1ae;
+    --accent-ink: #0d0f12;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 18px 64px;
+    background: var(--bg);
+    color: var(--text);
+    font: 19px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    max-width: 640px;
+    margin-inline: auto;
+  }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0 0 6px; }
+  h2 { font-size: 22px; margin: 36px 0 10px; }
+  p { margin: 0 0 14px; }
+  .lede { color: var(--dim); margin-bottom: 26px; }
+  .btn {
+    display: block;
+    background: var(--accent);
+    color: var(--accent-ink);
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 21px;
+    text-align: center;
+    padding: 20px 18px;
+    border-radius: 14px;
+    margin: 0 0 12px;
+  }
+  .btn.secondary {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--line);
+    font-size: 18px;
+    font-weight: 600;
+    padding: 16px;
+  }
+  .size { display: block; font-weight: 400; font-size: 15px; opacity: .75; margin-top: 3px; }
+  ol { padding-left: 24px; margin: 0 0 16px; }
+  li { margin-bottom: 12px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin: 0 0 18px;
+  }
+  code, .hash {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 14px;
+    word-break: break-all;
+    color: var(--dim);
+  }
+  .tap { color: var(--accent); font-weight: 600; }
+  footer { margin-top: 44px; color: var(--dim); font-size: 15px; }
+  a { color: var(--accent); }
+  .qr { background: #fff; padding: 14px; border-radius: 12px; display: inline-block; }
+  .qr img { display: block; width: 240px; height: 240px; }
+</style>
+</head>
+<body>
+
+<h1>Recorder</h1>
+<p class="lede">
+  A phone that listens all day, writes down what it hears, and keeps every recording on the
+  device. No account, no cloud transcription, no subscription.
+</p>
+
+<a class="btn" href="__RAZR_URL__">
+  Download for Razr
+  <span class="size">Flip phones · __RAZR_SIZE__ · version __VERSION__</span>
+</a>
+<a class="btn secondary" href="__STANDARD_URL__">
+  Other phones
+  <span class="size">No cover screen · __STANDARD_SIZE__</span>
+</a>
+
+<h2>Installing it</h2>
+<p>Do this on the phone itself. It takes about two minutes.</p>
+<ol>
+  <li>Tap the download button above. Your browser will warn you about the file type — that is
+    normal for an app that does not come from the Play Store.</li>
+  <li>When it finishes, tap <span class="tap">Open</span>.</li>
+  <li>Android will say it is not allowed to install unknown apps. Tap
+    <span class="tap">Settings</span>, then turn on
+    <span class="tap">Allow from this source</span>, then press back.</li>
+  <li>Tap <span class="tap">Install</span>, then <span class="tap">Open</span>.</li>
+  <li>The app walks you through the rest: microphone permission, downloading the speech
+    models over Wi-Fi, and the cover screen setting.</li>
+</ol>
+
+<div class="card">
+  <p><strong>The first run downloads about 460 MB</strong> of speech-recognition models, plus
+  a chat model if you choose one. Do it on Wi-Fi. After that the phone never needs the
+  internet to record or transcribe.</p>
+</div>
+
+<h2>Is this file genuine?</h2>
+<p>
+  Compare the SHA-256 below with the one in
+  <a href="__CHECKSUMS_URL__">SHA256SUMS</a>, published by the build that produced these files.
+</p>
+<div class="card">
+  <p><code>recorder-razr-release.apk</code></p>
+  <p class="hash">__RAZR_SHA__</p>
+  <p><code>recorder-standard-release.apk</code></p>
+  <p class="hash">__STANDARD_SHA__</p>
+</div>
+<p class="lede">
+  Every build is made in public by GitHub Actions from the source in this repository, and
+  signed with the same key, so updates install over the top of what you already have.
+</p>
+
+__QR_SECTION__
+
+<h2>What it does with what it hears</h2>
+<div class="card">
+  <p><strong>Recordings never leave the phone.</strong> Speech becomes text using the phone's
+  own processor. There is no cloud transcription and nothing to sign in to.</p>
+  <p><strong>Nothing is sent without you.</strong> If you later connect email or calendar, the
+  app writes a draft and waits for you to tap approve. It cannot send on its own.</p>
+  <p><strong>The bigger AI is off by default.</strong> If you switch it on and add your own
+  API key, only text is ever sent — never audio.</p>
+</div>
+
+<footer>
+  <p>
+    Source, issues and every build:
+    <a href="https://github.com/__OWNER__/__REPO__">github.com/__OWNER__/__REPO__</a>
+  </p>
+  <p>Built from commit <code>__COMMIT__</code>.</p>
+</footer>
+
+</body>
+</html>
