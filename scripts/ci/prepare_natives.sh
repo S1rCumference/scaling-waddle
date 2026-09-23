@@ -27,6 +27,9 @@ LLAMA_COMMIT="${LLAMA_COMMIT:-fee39dd92673ba0c08c8da96040ce53368b35188}"
 LLAMA_REPO="https://github.com/ggml-org/llama.cpp"
 
 ABI="arm64-v8a"
+# Lowest API the llama.android wrapper can actually be built for; see Patch 1 below.
+# Must stay in step with LocalModelRuntime.MIN_SDK.
+LLAMA_MIN_SDK=30
 SHERPA_DEST="core-asr/libs/${SHERPA_AAR}"
 LLAMA_DEST="core-llm/libs/llama-release.aar"
 
@@ -131,9 +134,14 @@ ANDROID_DIR="$WORK/examples/llama.android"
 
 LIB_GRADLE="$ANDROID_DIR/lib/build.gradle.kts"
 
-# Patch 1: minSdk. Upstream sets 33, which would force this whole app to Android 13+.
-# Nothing in that thin Kotlin wrapper needs it, and the app targets minSdk 26.
-sed -i 's/^\( *\)minSdk = 33$/\1minSdk = 26/' "$LIB_GRADLE"
+# Patch 1: minSdk. Upstream sets 33, but the real constraint is API 30: their
+# src/main/cpp/logging.h calls __android_log_is_loggable, which was introduced in
+# Android 30. Anything lower fails to compile with exactly that error.
+#
+# The app itself stays on minSdk 26 and declares tools:overrideLibrary for this AAR, so
+# recording and transcription still reach Android 8 phones; only the local LLM is gated
+# to Android 11+ (see LocalModelRuntime.available).
+sed -i "s/^\( *\)minSdk = 33$/\1minSdk = $LLAMA_MIN_SDK/" "$LIB_GRADLE"
 
 # Patch 2: drop x86_64. We ship arm64 only, and the native build is the slow part.
 sed -i "s/abiFilters += listOf(\"arm64-v8a\", \"x86_64\")/abiFilters += listOf(\"$ABI\")/" "$LIB_GRADLE"
@@ -152,7 +160,8 @@ grep -nE 'minSdk|abiFilters|ndkVersion|version = "3' "$LIB_GRADLE" || true
 
 # Verify the patches actually applied; a silent sed miss would mean a 33-minSdk AAR that
 # fails much later with a confusing manifest-merger error.
-grep -q "minSdk = 26" "$LIB_GRADLE" || { echo "ERROR: minSdk patch did not apply" >&2; exit 1; }
+grep -q "minSdk = $LLAMA_MIN_SDK" "$LIB_GRADLE" ||
+  { echo "ERROR: minSdk patch did not apply" >&2; exit 1; }
 grep -q "abiFilters += listOf(\"$ABI\")" "$LIB_GRADLE" ||
   { echo "ERROR: abiFilters patch did not apply" >&2; exit 1; }
 

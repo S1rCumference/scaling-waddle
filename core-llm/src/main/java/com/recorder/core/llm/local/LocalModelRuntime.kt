@@ -1,6 +1,7 @@
 package com.recorder.core.llm.local
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import com.recorder.core.llm.BuildConfig
 import java.io.Closeable
@@ -38,7 +39,25 @@ object LocalModelRuntime {
     private const val TAG = "LocalModelRuntime"
     private const val PLUGIN = "com.recorder.core.llm.local.LlamaCppPlugin"
 
-    val available: Boolean get() = BuildConfig.LLAMA_AVAILABLE
+    /**
+     * The bundled llama.cpp wrapper needs Android 11: its logging header uses
+     * `__android_log_is_loggable`, an API 30 symbol, so the native library cannot even be
+     * loaded below that. Kept in step with LLAMA_MIN_SDK in scripts/ci/prepare_natives.sh.
+     */
+    const val MIN_SDK = Build.VERSION_CODES.R
+
+    val available: Boolean
+        get() = BuildConfig.LLAMA_AVAILABLE && Build.VERSION.SDK_INT >= MIN_SDK
+
+    /** Why [available] is false, for the Settings screen. Null when it is available. */
+    val unavailableReason: String?
+        get() = when {
+            !BuildConfig.LLAMA_AVAILABLE -> "not bundled in this build"
+            Build.VERSION.SDK_INT < MIN_SDK ->
+                "needs Android 11 or newer (this phone runs ${Build.VERSION.RELEASE})"
+
+            else -> null
+        }
 
     /** llama.cpp commit the bundled AAR was built from, or "none". */
     val commit: String get() = BuildConfig.LLAMA_COMMIT

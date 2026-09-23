@@ -160,11 +160,9 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
             else -> "runtime ${AsrEngineFactory.sherpaVersion}, model installed"
         }
 
-        val llm = when {
-            !LocalModelRuntime.available -> "not bundled in this build"
-            else -> "llama.cpp @ ${LocalModelRuntime.commit}" +
-                (LocalModelRuntime.current?.let { ", loaded: $it" } ?: ", idle")
-        }
+        val llm = LocalModelRuntime.unavailableReason
+            ?: ("llama.cpp @ ${LocalModelRuntime.commit}" +
+                (LocalModelRuntime.current?.let { ", loaded: $it" } ?: ", idle"))
 
         return """
             Device: ${Build.MANUFACTURER} ${Build.MODEL}

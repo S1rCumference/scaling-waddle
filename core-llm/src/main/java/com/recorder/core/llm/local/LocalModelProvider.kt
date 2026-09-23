@@ -55,7 +55,9 @@ class LocalModelProvider(
             selector.heavyUnavailableReason() ?: "No local heavy model available."
         } else {
             when {
-                !LocalModelRuntime.available -> "llama.cpp runtime not bundled in this build."
+                !LocalModelRuntime.available ->
+                    "Local AI unavailable: ${LocalModelRuntime.unavailableReason}."
+
                 selector.smallModelCandidates().none { it.exists } ->
                     "No local model installed yet. Finish setup to download one."
 

@@ -12,6 +12,15 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!--
+        The llama.cpp wrapper AAR declares minSdk 30, because its logging header uses an
+        API 30 symbol. The recorder itself works fine on Android 8, so rather than drag the
+        whole app's floor up, the library's requirement is overridden here and the local
+        LLM is gated at runtime instead (LocalModelRuntime.MIN_SDK). On Android 8-10 the
+        app records and transcribes; the local AI reports itself unavailable.
+    -->
+    <uses-sdk tools:overrideLibrary="com.arm.aichat" />
+
     <!-- No SIM ever goes in this phone; nothing here should imply telephony. -->
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
