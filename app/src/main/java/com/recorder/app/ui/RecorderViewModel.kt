@@ -5,6 +5,7 @@ import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import com.recorder.app.BuildConfig
 import com.recorder.app.admin.DeviceOwner
+import com.recorder.app.cover.CoverDisplays
 import com.recorder.core.asr.AsrEngineFactory
 import com.recorder.core.llm.local.LocalModelRuntime
 import androidx.lifecycle.viewModelScope
@@ -26,6 +27,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -38,6 +41,19 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     val transcripts: StateFlow<List<TranscriptSegment>> =
         db.transcripts().recent().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Transcript for the cover screen: oldest first so the newest lands at the bottom, and
+     * sampled rather than streamed. A burst of segments would otherwise recompose the list
+     * several times a second on a screen nobody is watching closely, which is battery spent
+     * for nothing on an always-on OLED.
+     */
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    val coverTranscripts: StateFlow<List<TranscriptSegment>> =
+        db.transcripts().recent(COVER_SEGMENT_LIMIT)
+            .map { newestFirst -> newestFirst.asReversed() }
+            .sample(COVER_REFRESH_MS)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val flagged: StateFlow<List<FlaggedItem>> =
         db.flagged().active().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -157,6 +173,12 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         _status.value = null
     }
 
+    private companion object {
+        /** Enough history to scroll back a little on a 4 inch screen, not enough to cost. */
+        const val COVER_SEGMENT_LIMIT = 60
+        const val COVER_REFRESH_MS = 1_000L
+    }
+
     suspend fun providerSettings(): Triple<String, String, String> = Triple(
         settings.activeProvider.first(),
         settings.providerEndpoint.first(),
@@ -195,6 +217,9 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
             Speech recognition: $asr
             Local AI runtime: $llm
             Local heavy model: $heavy
+
+            Displays (read this open, then closed, to learn this phone's cover display):
+            ${CoverDisplays.describeAll(context)}
         """.trimIndent()
     }
 }

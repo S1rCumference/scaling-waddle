@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The "standard" flavour is for phones without a cover screen. Until now the flag that
+    was supposed to distinguish the two builds was never read, so both APKs shipped the
+    cover UI and differed by three bytes.
+
+    Here the cover activity is removed outright, so it cannot appear in the launcher on a
+    normal phone. The matching BuildConfig.COVER_UI_ENABLED flag stops CoverPresenter from
+    ever trying to launch it.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+        <activity
+            android:name=".ui.CoverActivity"
+            tools:node="remove" />
+    </application>
+</manifest>

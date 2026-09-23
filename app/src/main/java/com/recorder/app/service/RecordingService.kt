@@ -13,8 +13,10 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.recorder.app.BuildConfig
 import com.recorder.app.R
 import com.recorder.app.ServiceLocator
+import com.recorder.app.cover.CoverPresenter
 import com.recorder.app.ui.MainActivity
 import com.recorder.core.asr.AsrEngine
 import com.recorder.core.asr.AsrEngineFactory
@@ -49,6 +51,12 @@ class RecordingService : Service() {
     private var vad: VoiceActivityDetector? = null
     private var asr: AsrEngine? = null
 
+    /**
+     * Present only so something is alive all day to watch for the phone being closed. The
+     * audio pipeline never consults it, so fold state cannot disturb recording.
+     */
+    private var coverPresenter: CoverPresenter? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -66,6 +74,10 @@ class RecordingService : Service() {
         }
 
         startPipeline()
+
+        if (BuildConfig.COVER_UI_ENABLED) {
+            coverPresenter = CoverPresenter(this).also { it.start() }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -82,6 +94,7 @@ class RecordingService : Service() {
     }
 
     override fun onDestroy() {
+        coverPresenter?.stop()
         scope.cancel()
         vad?.close()
         asr?.close()
@@ -107,6 +120,7 @@ class RecordingService : Service() {
         )
 
         _state.value = RecorderState.RECORDING
+        _recordingSince.value = System.currentTimeMillis()
         updateNotification(
             getString(
                 R.string.notification_recording,
@@ -172,6 +186,10 @@ class RecordingService : Service() {
         private const val NOTIFICATION_ID = 1
 
         private val _state = MutableStateFlow(RecorderState.STOPPED)
+        private val _recordingSince = MutableStateFlow<Long?>(null)
+
+        /** When the current recording session started, for the cover screen's elapsed time. */
+        val recordingSince: StateFlow<Long?> = _recordingSince.asStateFlow()
 
         /** Observable so the UI can show whether recording is actually running. */
         val state: StateFlow<RecorderState> = _state.asStateFlow()
