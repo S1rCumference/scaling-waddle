@@ -39,6 +39,13 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+        if (llamaPresent) {
+            // The llama.android AAR is built with Kotlin 2.3, whose metadata this project's
+            // 1.9 compiler refuses to read. The API consumed from it is small and plain
+            // (an interface, a sealed class, a Flow), so reading the newer metadata is safe.
+            // Removing this is part of moving to our own JNI wrapper.
+            freeCompilerArgs += "-Xskip-metadata-version-check"
+        }
     }
 }
 

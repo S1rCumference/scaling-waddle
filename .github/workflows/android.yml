@@ -59,7 +59,7 @@ jobs:
         run: ./scripts/ci/prepare_natives.sh
 
       - name: Build debug APKs
-        run: ./gradlew --no-daemon assembleDebug
+        run: ./gradlew --no-daemon :app:assembleDebug
 
       - name: Upload razr APK
         uses: actions/upload-artifact@v4
@@ -174,7 +174,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           VERSION_NAME: ${{ steps.version.outputs.name }}
           VERSION_CODE: ${{ steps.version.outputs.code }}
-        run: ./gradlew --no-daemon assembleRelease
+        run: ./gradlew --no-daemon :app:assembleRelease
 
       - name: Collect and checksum artifacts
         run: |
