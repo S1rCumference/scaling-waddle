@@ -97,6 +97,19 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        jniLibs {
+            // Native libraries are merged before abiFilters is applied, so two AARs each
+            // carrying an x86 libonnxruntime.so collide even though neither would ever be
+            // packaged. Drop every non-arm64 ABI up front.
+            excludes += listOf(
+                "lib/x86/**",
+                "lib/x86_64/**",
+                "lib/armeabi-v7a/**",
+                "lib/armeabi/**",
+                "lib/mips/**",
+                "lib/mips64/**",
+            )
+        }
     }
 }
 
