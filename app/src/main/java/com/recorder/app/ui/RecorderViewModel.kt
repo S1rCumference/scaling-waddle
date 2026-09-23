@@ -18,6 +18,7 @@ import com.recorder.core.llm.ProviderIds
 import com.recorder.core.llm.TranscriptAssistant
 import com.recorder.core.llm.local.DeviceCapabilities
 import com.recorder.core.llm.local.LocalModelSelector
+import com.recorder.core.llm.local.LocalModelRuntime as Runtime
 import com.recorder.core.storage.FlaggedItem
 import com.recorder.core.storage.Folder
 import com.recorder.core.storage.PendingAction
@@ -168,6 +169,51 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
             onSuccess = { "Device owner removed. Recording will need a tap after a reboot." },
             onFailure = { "Could not remove device owner: ${it.message}" },
         )
+    }
+
+    private val _benchmark = MutableStateFlow<String?>(null)
+    val benchmark: StateFlow<String?> = _benchmark.asStateFlow()
+
+    private val _benchmarkRunning = MutableStateFlow(false)
+    val benchmarkRunning: StateFlow<Boolean> = _benchmarkRunning.asStateFlow()
+
+    /**
+     * Measures this phone with the model that is actually installed, using the backend's own
+     * benchmark. Numbers for the README come from here, run on the device — there is no way
+     * to produce them off it, so none are guessed.
+     */
+    fun runBenchmark() {
+        if (_benchmarkRunning.value) return
+        _benchmarkRunning.value = true
+        _benchmark.value = "Loading the model and measuring. This takes a minute."
+
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            val selector = LocalModelSelector(context)
+            val spec = selector.selectSmallModel() ?: selector.selectHeavyModel()
+
+            _benchmark.value = when {
+                spec == null -> "No local model is installed, so there is nothing to measure."
+                else -> {
+                    val model = Runtime.load(context, spec)
+                    when (model) {
+                        null -> "Could not load ${spec.fileName}."
+                        else -> {
+                            val report = model.benchmark()
+                            Runtime.unload()
+                            buildString {
+                                append("Model: ").append(spec.label).append('\n')
+                                append("RAM tier: ").append(DeviceCapabilities.ramTier(context))
+                                append(" (").append(DeviceCapabilities.marketedRamGb(context))
+                                append(" GB)\n\n")
+                                append(report ?: "This backend does not expose a benchmark.")
+                            }
+                        }
+                    }
+                }
+            }
+            _benchmarkRunning.value = false
+        }
     }
 
     /**

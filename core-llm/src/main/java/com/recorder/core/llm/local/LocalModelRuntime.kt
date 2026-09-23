@@ -19,6 +19,12 @@ interface LocalLlm : Closeable {
      */
     suspend fun generate(prompt: String, systemPrompt: String? = null, maxTokens: Int = 512): String
 
+    /**
+     * Runs the backend's own benchmark, if it has one, and returns its raw report.
+     * Null when the backend cannot benchmark itself — better than inventing numbers.
+     */
+    suspend fun benchmark(promptTokens: Int = 128, generateTokens: Int = 64): String? = null
+
     override fun close() {}
 }
 

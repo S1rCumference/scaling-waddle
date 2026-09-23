@@ -229,6 +229,28 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
             }
         }
 
+        Section("Benchmark") {
+            val benchmarkText by viewModel.benchmark.collectAsState()
+            val running by viewModel.benchmarkRunning.collectAsState()
+            Text(
+                "Measures this phone with the installed model. The numbers in the README " +
+                    "come from running this here; they cannot be produced anywhere else.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(onClick = viewModel::runBenchmark, enabled = !running) {
+                Text(if (running) "Measuring…" else "Run benchmark")
+            }
+            benchmarkText?.let { report ->
+                Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                    Text(
+                        report,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(12.dp),
+                    )
+                }
+            }
+        }
+
         Section("Power report") {
             Card(Modifier.fillMaxWidth()) {
                 Text(

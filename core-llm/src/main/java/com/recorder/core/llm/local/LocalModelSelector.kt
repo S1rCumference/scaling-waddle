@@ -68,7 +68,7 @@ class LocalModelSelector(private val context: Context) {
     fun heavyUnavailableReason(): String? = when {
         DeviceCapabilities.ramTier(context) == RamTier.LOW_8GB ->
             "Not enough RAM for a local heavy model on this device " +
-                "(${"%.0f".format(DeviceCapabilities.totalRamGb(context))} GB). " +
+                "(${DeviceCapabilities.marketedRamGb(context)} GB). " +
                 "Use a cloud provider, or a 12 GB+ phone."
 
         !LocalModelRuntime.available -> "llama.cpp runtime not bundled in this build."

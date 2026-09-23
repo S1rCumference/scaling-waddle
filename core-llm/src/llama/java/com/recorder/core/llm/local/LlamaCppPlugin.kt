@@ -46,6 +46,17 @@ class LlamaCppEngine(
         }
 
     /**
+     * The wrapper ships its own benchmark, which is why this project does not hand-roll one:
+     * pp is prompt processing, tg is token generation, pl is parallel sequences, nr repeats.
+     */
+    override suspend fun benchmark(promptTokens: Int, generateTokens: Int): String? =
+        turnLock.withLock {
+            runCatching { engine.bench(pp = promptTokens, tg = generateTokens, pl = 1, nr = 1) }
+                .onFailure { Log.w(TAG, "bench failed", it) }
+                .getOrNull()
+        }
+
+    /**
      * Unloads the weights but leaves the engine initialised, so the next question can load
      * a model again. Full teardown ([InferenceEngine.destroy]) would end the engine's
      * coroutine scope for the life of the process.
