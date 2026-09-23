@@ -10,6 +10,7 @@ import com.recorder.core.asr.AsrEngineFactory
 import com.recorder.core.llm.local.LocalModelRuntime
 import androidx.lifecycle.viewModelScope
 import com.recorder.app.ServiceLocator
+import com.recorder.app.service.PowerMetrics
 import com.recorder.app.service.RecordingService
 import com.recorder.app.work.HeavySyncScheduler
 import com.recorder.core.connectors.RefreshTokenGoogleAuth
@@ -167,6 +168,34 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
             onSuccess = { "Device owner removed. Recording will need a tap after a reboot." },
             onFailure = { "Could not remove device owner: ${it.message}" },
         )
+    }
+
+    /**
+     * The numbers that decide whether a full day of listening fits in the battery. Reset
+     * when the process does, which the screen states rather than hides.
+     */
+    fun powerReport(): String {
+        val s = PowerMetrics.snapshot()
+        val hours = s.micUptimeMs / 3_600_000.0
+
+        fun duration(ms: Long): String {
+            val totalMinutes = ms / 60_000
+            return "%dh %02dm".format(totalMinutes / 60, totalMinutes % 60)
+        }
+
+        return """
+            Microphone uptime: ${duration(s.micUptimeMs)}
+            Speech transcribed: ${duration(s.audioMsTranscribed)} (${"%.1f".format(s.speechSharePercent)}% of uptime)
+            Segments decoded: ${s.transcriptions}
+            Decoder CPU time: ${s.asrCpuMs / 1000}s (${"%.2f".format(s.asrDutyCyclePercent)}% duty cycle)
+            Decode per hour: ${if (hours > 0) "%.0fs".format(s.asrCpuMs / 1000.0 / hours) else "n/a"}
+            Model loads / unloads: ${LocalModelRuntime.loadCount} / ${LocalModelRuntime.unloadCount}
+            Model resident now: ${LocalModelRuntime.current ?: "no"}
+
+            No wakelocks are taken by this app. The foreground service and the audio
+            recorder keep the CPU available while recording; nothing else holds one.
+            Counters reset when the app's process restarts.
+        """.trimIndent()
     }
 
     fun clearStatus() {

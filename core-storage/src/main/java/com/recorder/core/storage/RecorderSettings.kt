@@ -3,6 +3,8 @@ package com.recorder.core.storage
 import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
@@ -41,6 +43,20 @@ class RecorderSettings(private val context: Context) {
     val setupComplete: Flow<Boolean> =
         context.dataStore.data.map { it[Keys.SETUP_COMPLETE] ?: false }
 
+    /**
+     * Decoder threads. The single biggest CPU knob in the app; more threads finish a
+     * sentence sooner but cost battery nobody is waiting to spend.
+     */
+    val asrThreads: Flow<Int> =
+        context.dataStore.data.map { it[Keys.ASR_THREADS] ?: DEFAULT_ASR_THREADS }
+
+    /**
+     * Speech probability above which the VAD opens a segment. Higher misses quiet speech;
+     * lower wakes the decoder for background noise, which is the expensive mistake.
+     */
+    val vadThreshold: Flow<Float> =
+        context.dataStore.data.map { it[Keys.VAD_THRESHOLD] ?: DEFAULT_VAD_THRESHOLD }
+
     /** Whether the user agreed to download models over a metered connection. */
     val allowMeteredDownloads: Flow<Boolean> =
         context.dataStore.data.map { it[Keys.ALLOW_METERED] ?: false }
@@ -65,6 +81,12 @@ class RecorderSettings(private val context: Context) {
 
     suspend fun setAllowMeteredDownloads(allow: Boolean) = edit { it[Keys.ALLOW_METERED] = allow }
 
+    suspend fun setAsrThreads(threads: Int) = edit { it[Keys.ASR_THREADS] = threads.coerceIn(1, 8) }
+
+    suspend fun setVadThreshold(threshold: Float) = edit {
+        it[Keys.VAD_THRESHOLD] = threshold.coerceIn(0.1f, 0.95f)
+    }
+
     private suspend fun edit(block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
         context.dataStore.edit(block)
     }
@@ -78,9 +100,14 @@ class RecorderSettings(private val context: Context) {
         val HEAVY_TIER_ENABLED = booleanPreferencesKey("heavy_tier_enabled")
         val SETUP_COMPLETE = booleanPreferencesKey("setup_complete")
         val ALLOW_METERED = booleanPreferencesKey("allow_metered_downloads")
+        val ASR_THREADS = intPreferencesKey("asr_threads")
+        val VAD_THRESHOLD = floatPreferencesKey("vad_threshold")
     }
 
     companion object {
+        const val DEFAULT_ASR_THREADS = 2
+        const val DEFAULT_VAD_THRESHOLD = 0.5f
+
         val DEFAULT_TRIGGERS = setOf(
             "business idea",
             "remind me",

@@ -7,6 +7,12 @@ import com.recorder.core.llm.LlmResponse
 import com.recorder.core.llm.ProviderIds
 import com.recorder.core.llm.Role
 import com.recorder.core.llm.ToolSpec
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * An on-device model behind the same [LlmProvider] interface as Claude/OpenAI/Gemini, so
@@ -25,6 +31,14 @@ class LocalModelProvider(
 ) : LlmProvider {
 
     private val selector = LocalModelSelector(context)
+
+    /**
+     * Unloading is debounced rather than immediate: someone asking a question usually asks
+     * another one, and reloading several gigabytes between them would be worse than holding
+     * it briefly. Holding it all day is what this avoids.
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var idleUnload: Job? = null
 
     val modelLabel: String? get() = LocalModelRuntime.current
 
@@ -45,10 +59,22 @@ class LocalModelProvider(
                 ).trim(),
             )
         }.getOrElse { LlmResponse.failed(it.message ?: "local inference failed") }
+            .also { scheduleIdleUnload() }
     }
 
     /** Frees the weights. Called when the app goes idle so the model is not resident all day. */
-    suspend fun unload() = LocalModelRuntime.unload()
+    suspend fun unload() {
+        idleUnload?.cancel()
+        LocalModelRuntime.unload()
+    }
+
+    private fun scheduleIdleUnload() {
+        idleUnload?.cancel()
+        idleUnload = scope.launch {
+            delay(IDLE_UNLOAD_MS)
+            LocalModelRuntime.unload()
+        }
+    }
 
     private fun unavailableReason(): String =
         if (heavy) {
@@ -64,6 +90,11 @@ class LocalModelProvider(
                 else -> "Not enough free memory to load a local model right now."
             }
         }
+
+    private companion object {
+        /** Long enough for a follow-up question, short enough not to hold RAM all day. */
+        const val IDLE_UNLOAD_MS = 3 * 60 * 1000L
+    }
 
     private fun List<ChatMessage>.systemContent(): String? =
         filter { it.role == Role.SYSTEM }

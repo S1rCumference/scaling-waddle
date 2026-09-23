@@ -21,7 +21,7 @@ interface AsrEngine : Closeable {
 
 /** Contract for an optional engine implementation compiled in only when its runtime is present. */
 interface AsrEnginePlugin {
-    fun create(modelDir: File): AsrEngine?
+    fun create(modelDir: File, threads: Int): AsrEngine?
 }
 
 /** Records audio but yields no text — the honest default before models are installed. */
@@ -45,6 +45,13 @@ object AsrEngineFactory {
     private const val TAG = "AsrEngineFactory"
     private const val SHERPA_PLUGIN = "com.recorder.core.asr.SherpaAsrEnginePlugin"
 
+    /**
+     * Two threads is the default on purpose. Decoding is the single largest CPU cost in an
+     * all-day recorder, and adding threads buys latency that nobody is waiting on while
+     * costing battery that matters.
+     */
+    const val DEFAULT_THREADS = 2
+
     /** Whether the sherpa-onnx AAR was bundled into this build at all. */
     val sherpaBundled: Boolean get() = BuildConfig.SHERPA_AVAILABLE
 
@@ -60,7 +67,7 @@ object AsrEngineFactory {
      * engine when both its AAR and model files are present, otherwise a no-op engine.
      * Never throws — a missing model must degrade the app, not stop recording.
      */
-    fun create(context: Context): AsrEngine {
+    fun create(context: Context, threads: Int = DEFAULT_THREADS): AsrEngine {
         val modelDir = AsrModels.asrDir(context)
         if (!BuildConfig.SHERPA_AVAILABLE) {
             return NoopAsrEngine("sherpa-onnx AAR not bundled")
@@ -72,7 +79,7 @@ object AsrEngineFactory {
             val plugin = Class.forName(SHERPA_PLUGIN)
                 .getDeclaredConstructor()
                 .newInstance() as AsrEnginePlugin
-            plugin.create(modelDir)
+            plugin.create(modelDir, threads.coerceIn(1, 8))
         }.onFailure { Log.w(TAG, "sherpa engine unavailable", it) }
             .getOrNull() ?: NoopAsrEngine("engine failed to load")
     }

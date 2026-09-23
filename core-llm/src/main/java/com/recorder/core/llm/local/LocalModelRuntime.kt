@@ -63,6 +63,15 @@ object LocalModelRuntime {
     val commit: String get() = BuildConfig.LLAMA_COMMIT
 
     private val lock = Mutex()
+
+    /** Counted so the power report can show whether the model is thrashing in and out. */
+    @Volatile
+    var loadCount: Int = 0
+        private set
+
+    @Volatile
+    var unloadCount: Int = 0
+        private set
     private var resident: LocalLlm? = null
     private var residentPath: String? = null
 
@@ -99,6 +108,7 @@ object LocalModelRuntime {
                 ?.also {
                     resident = it
                     residentPath = model.path
+                    loadCount++
                 }
         }
 
@@ -106,7 +116,10 @@ object LocalModelRuntime {
     suspend fun unload() = lock.withLock { evict() }
 
     private fun evict() {
-        resident?.let { runCatching { it.close() }.onFailure { e -> Log.w(TAG, "unload failed", e) } }
+        resident?.let {
+            runCatching { it.close() }.onFailure { e -> Log.w(TAG, "unload failed", e) }
+            unloadCount++
+        }
         resident = null
         residentPath = null
     }

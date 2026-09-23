@@ -46,7 +46,7 @@ class SherpaAsrEngine(private val recognizer: OfflineRecognizer) : AsrEngine {
 }
 
 class SherpaAsrEnginePlugin : AsrEnginePlugin {
-    override fun create(modelDir: File): AsrEngine? = runCatching {
+    override fun create(modelDir: File, threads: Int): AsrEngine? = runCatching {
         val encoder = modelDir.matching("encoder") ?: error("encoder model missing")
         val decoder = modelDir.matching("decoder") ?: error("decoder model missing")
         val joiner = modelDir.matching("joiner") ?: error("joiner model missing")
@@ -62,7 +62,7 @@ class SherpaAsrEnginePlugin : AsrEnginePlugin {
                 ),
                 tokens = tokens.absolutePath,
                 modelType = "nemo_transducer",
-                numThreads = 2,
+                numThreads = threads,
             ),
         )
         SherpaAsrEngine(OfflineRecognizer(assetManager = null, config = config))

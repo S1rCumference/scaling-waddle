@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import com.recorder.app.service.RecordingService
 import com.recorder.app.service.ResumeNotifier
+import com.recorder.app.work.FolderFilingWorker
 import com.recorder.app.work.HeavySyncScheduler
 import com.recorder.app.work.RecordingWatchdog
 
@@ -16,6 +17,7 @@ class RecorderApplication : Application() {
         ServiceLocator.init(this)
         HeavySyncScheduler.ensureScheduled(this)
         RecordingWatchdog.ensureScheduled(this)
+        FolderFilingWorker.ensureScheduled(this)
     }
 
     private fun createNotificationChannels() {

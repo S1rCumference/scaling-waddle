@@ -12,7 +12,7 @@ class FolderClassifier(private val provider: LlmProvider) {
 
     suspend fun classify(segment: TranscriptSegment, folders: List<Folder>): String {
         val names = folders.map { it.name }
-        heuristic(segment.text)?.let { return it }
+        heuristicFolder(segment.text)?.let { return it }
 
         val response = provider.complete(
             listOf(
@@ -42,12 +42,18 @@ class FolderClassifier(private val provider: LlmProvider) {
         return names.firstOrNull { it.equals(answer, ignoreCase = true) } ?: answer
     }
 
-    private fun heuristic(text: String): String? {
-        val lower = text.lowercase()
-        return HEURISTICS.entries.firstOrNull { (_, cues) -> cues.any { it in lower } }?.key
-    }
-
     companion object {
+
+        /**
+         * Pure string matching, safe to run on the recording hot path: no model, no
+         * allocation beyond a lowercase copy. Returns null when nothing obvious matches, and
+         * the batch job sorts those out later with the model.
+         */
+        fun heuristicFolder(text: String): String? {
+            val lower = text.lowercase()
+            return HEURISTICS.entries.firstOrNull { (_, cues) -> cues.any { it in lower } }?.key
+        }
+
         const val DEFAULT_FOLDER = "Unsorted"
 
         private const val SYSTEM_PROMPT =

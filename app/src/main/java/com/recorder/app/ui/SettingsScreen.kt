@@ -229,6 +229,16 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
             }
         }
 
+        Section("Power report") {
+            Card(Modifier.fillMaxWidth()) {
+                Text(
+                    viewModel.powerReport(),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(12.dp),
+                )
+            }
+        }
+
         Section("This device") {
             Card(Modifier.fillMaxWidth()) {
                 Text(

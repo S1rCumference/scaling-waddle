@@ -34,6 +34,17 @@ interface TranscriptDao {
     suspend fun assignFolder(id: Long, folderId: Long?)
 
     /**
+     * Segments no folder has claimed yet. Filing these is a batch job: running a language
+     * model once per segment, inline with recording, was costing a model call for every
+     * sentence spoken.
+     */
+    @Query("SELECT * FROM transcript_segments WHERE folder_id IS NULL ORDER BY start_ts ASC LIMIT :limit")
+    suspend fun unfiled(limit: Int): List<TranscriptSegment>
+
+    @Query("SELECT COUNT(*) FROM transcript_segments WHERE folder_id IS NULL")
+    suspend fun unfiledCount(): Int
+
+    /**
      * FTS match against the transcript text. [query] is an SQLite FTS MATCH expression,
      * so callers must sanitise user input through [FtsQuery.sanitize] first.
      */

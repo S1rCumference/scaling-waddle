@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -103,35 +104,42 @@ class RecordingService : Service() {
     }
 
     private fun startPipeline() {
-        val detector = SileroVad.tryLoad(AsrModels.sileroVadFile(this)) ?: EnergyVad()
-        val engine = AsrEngineFactory.create(this)
-        vad = detector
-        asr = engine
-
-        val pipeline = TranscriptPipeline(
-            asr = engine,
-            transcripts = ServiceLocator.database.transcripts(),
-            folders = ServiceLocator.database.folders(),
-            keywordWatcher = KeywordWatcher(
-                ServiceLocator.database.flagged(),
-                ServiceLocator.settings,
-            ),
-            providers = ServiceLocator.providers,
-        )
-
-        _state.value = RecorderState.RECORDING
-        _recordingSince.value = System.currentTimeMillis()
-        updateNotification(
-            getString(
-                R.string.notification_recording,
-                if (detector is SileroVad) "Silero" else "energy",
-                engine.name,
-            ),
-        )
-
+        // The tunables live in DataStore, so the pipeline is assembled inside a coroutine
+        // rather than blocking onCreate on a disk read.
         scope.launch {
+            val settings = ServiceLocator.settings
+            val threads = settings.asrThreads.first()
+            val threshold = settings.vadThreshold.first()
+
+            val detector = SileroVad.tryLoad(AsrModels.sileroVadFile(this@RecordingService))
+                ?: EnergyVad()
+            val engine = AsrEngineFactory.create(this@RecordingService, threads)
+            vad = detector
+            asr = engine
+
+            val pipeline = TranscriptPipeline(
+                asr = engine,
+                transcripts = ServiceLocator.database.transcripts(),
+                folders = ServiceLocator.database.folders(),
+                keywordWatcher = KeywordWatcher(
+                    ServiceLocator.database.flagged(),
+                    ServiceLocator.settings,
+                ),
+            )
+
+            _state.value = RecorderState.RECORDING
+            _recordingSince.value = System.currentTimeMillis()
+            PowerMetrics.onRecordingStarted()
+            updateNotification(
+                getString(
+                    R.string.notification_recording,
+                    if (detector is SileroVad) "Silero" else "energy",
+                    engine.name,
+                ),
+            )
+
             AudioCapture().frames()
-                .segmentSpeech(detector, SpeechSegmenter())
+                .segmentSpeech(detector, SpeechSegmenter(threshold = threshold))
                 .catch { error ->
                     Log.e(TAG, "capture pipeline failed", error)
                     _state.value = RecorderState.ERROR
