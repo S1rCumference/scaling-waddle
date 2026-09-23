@@ -10,6 +10,11 @@ plugins {
 val sherpaAar = fileTree("libs") { include("sherpa-onnx*.aar", "sherpa-onnx*.jar") }
 val sherpaPresent = !sherpaAar.isEmpty
 
+// Surfaced in Settings so what actually shipped is visible on the phone, not inferred.
+val sherpaVersion = sherpaAar.files.firstOrNull()?.name
+    ?.let { Regex("""(\d+\.\d+\.\d+)""").find(it)?.groupValues?.get(1) }
+    ?: "none"
+
 android {
     namespace = "com.recorder.core.asr"
     compileSdk = rootProject.extra["compileSdkVersion"] as Int
@@ -17,6 +22,7 @@ android {
     defaultConfig {
         minSdk = rootProject.extra["minSdkVersion"] as Int
         buildConfigField("boolean", "SHERPA_AVAILABLE", sherpaPresent.toString())
+        buildConfigField("String", "SHERPA_VERSION", "\"$sherpaVersion\"")
     }
 
     buildFeatures {

@@ -16,6 +16,12 @@ android {
     defaultConfig {
         minSdk = rootProject.extra["minSdkVersion"] as Int
         buildConfigField("boolean", "LLAMA_AVAILABLE", llamaPresent.toString())
+        // Set by CI to the llama.cpp commit the bundled AAR was built from.
+        buildConfigField(
+            "String",
+            "LLAMA_COMMIT",
+            "\"${System.getenv("LLAMA_COMMIT")?.take(12) ?: "none"}\"",
+        )
     }
 
     buildFeatures {

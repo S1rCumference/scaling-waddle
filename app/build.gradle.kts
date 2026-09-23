@@ -4,6 +4,13 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+/**
+ * Release signing comes from the environment so the key never lives in the repo.
+ * CI decodes KEYSTORE_BASE64 to a file and exports these; locally they are simply absent
+ * and the release build stays unsigned rather than failing.
+ */
+val keystorePath: String? = System.getenv("KEYSTORE_PATH")?.takeIf { File(it).isFile }
+
 android {
     namespace = "com.recorder.app"
     compileSdk = rootProject.extra["compileSdkVersion"] as Int
@@ -12,10 +19,28 @@ android {
         applicationId = "com.recorder.app"
         minSdk = rootProject.extra["minSdkVersion"] as Int
         targetSdk = rootProject.extra["targetSdkVersion"] as Int
-        versionCode = 1
-        versionName = "0.1.0"
+
+        // Derived from the git tag in CI (see .github/workflows/android.yml) so the
+        // in-app updater can compare versions meaningfully.
+        versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
+        versionName = System.getenv("VERSION_NAME") ?: "0.1.0-dev"
+
+        ndk {
+            abiFilters += rootProject.extra["ndkAbi"] as String
+        }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = File(keystorePath)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
     }
 
     flavorDimensions += "form"
@@ -35,11 +60,19 @@ android {
 
     buildTypes {
         release {
+            // Kept off: both native runtimes are reached by Class.forName, and a stripped
+            // build that silently loses them would look exactly like a missing model.
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (keystorePath != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         debug {
             isDebuggable = true
+            // Distinct id so the development build can sit alongside the signed release
+            // without an install-time signature clash.
+            applicationIdSuffix = ".debug"
         }
     }
 

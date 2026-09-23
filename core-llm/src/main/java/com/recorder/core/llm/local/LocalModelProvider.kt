@@ -7,16 +7,16 @@ import com.recorder.core.llm.LlmResponse
 import com.recorder.core.llm.ProviderIds
 import com.recorder.core.llm.Role
 import com.recorder.core.llm.ToolSpec
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 /**
  * An on-device model behind the same [LlmProvider] interface as Claude/OpenAI/Gemini, so
  * it shows up as one more entry in the provider picker instead of a parallel system.
  *
- * The model is loaded lazily on first use and kept resident; on a device that cannot host
- * one, [complete] returns [LlmResponse.unavailable] with the reason rather than trying a
- * load that would be OOM-killed.
+ * Residency is not owned here: [LocalModelRuntime] holds the single model slot, so the
+ * small chat model and the heavy tier can both be constructed without fighting over the
+ * underlying singleton. On a device that cannot host a model, [complete] returns
+ * [LlmResponse.unavailable] with the reason rather than attempting a load that would be
+ * OOM-killed.
  */
 class LocalModelProvider(
     private val context: Context,
@@ -25,32 +25,30 @@ class LocalModelProvider(
 ) : LlmProvider {
 
     private val selector = LocalModelSelector(context)
-    private val lock = Mutex()
-    private var engine: LocalLlm? = null
 
-    val modelLabel: String? get() = engine?.modelName
+    val modelLabel: String? get() = LocalModelRuntime.current
 
     override suspend fun complete(messages: List<ChatMessage>, tools: List<ToolSpec>): LlmResponse {
-        val model = lock.withLock {
-            engine ?: run {
-                val spec = (if (heavy) selector.selectHeavyModel() else selector.selectSmallModel())
-                    ?: return LlmResponse.unavailable(unavailableReason())
-                LocalModelRuntime.load(spec)?.also { engine = it }
-                    ?: return LlmResponse.unavailable("Model runtime failed to load ${spec.fileName}.")
-            }
-        }
+        val spec = (if (heavy) selector.selectHeavyModel() else selector.selectSmallModel())
+            ?: return LlmResponse.unavailable(unavailableReason())
 
-        // Local models here are used for summarising and folder assignment, not agentic
-        // tool use; tool specs are ignored rather than silently half-supported.
+        val model = LocalModelRuntime.load(context, spec)
+            ?: return LlmResponse.unavailable("Model runtime failed to load ${spec.fileName}.")
+
+        // Local models here summarise and file transcripts rather than call tools, so tool
+        // specs are ignored outright instead of being half-supported.
         return runCatching {
-            LlmResponse(text = model.generate(messages.toPrompt()).trim())
+            LlmResponse(
+                text = model.generate(
+                    prompt = messages.userContent(),
+                    systemPrompt = messages.systemContent(),
+                ).trim(),
+            )
         }.getOrElse { LlmResponse.failed(it.message ?: "local inference failed") }
     }
 
-    fun unload() {
-        engine?.close()
-        engine = null
-    }
+    /** Frees the weights. Called when the app goes idle so the model is not resident all day. */
+    suspend fun unload() = LocalModelRuntime.unload()
 
     private fun unavailableReason(): String =
         if (heavy) {
@@ -59,21 +57,30 @@ class LocalModelProvider(
             when {
                 !LocalModelRuntime.available -> "llama.cpp runtime not bundled in this build."
                 selector.smallModelCandidates().none { it.exists } ->
-                    "No local model installed. Run scripts/fetch_models.sh to push one."
+                    "No local model installed yet. Finish setup to download one."
 
                 else -> "Not enough free memory to load a local model right now."
             }
         }
 
-    private fun List<ChatMessage>.toPrompt(): String = buildString {
-        this@toPrompt.forEach { message ->
+    private fun List<ChatMessage>.systemContent(): String? =
+        filter { it.role == Role.SYSTEM }
+            .joinToString("\n\n") { it.content }
+            .takeIf { it.isNotBlank() }
+
+    /**
+     * Everything that is not the system prompt, flattened into one turn. The backend takes
+     * a single user message, so prior turns are labelled inline rather than lost.
+     */
+    private fun List<ChatMessage>.userContent(): String = buildString {
+        this@userContent.filterNot { it.role == Role.SYSTEM }.forEach { message ->
             when (message.role) {
-                Role.SYSTEM -> append("System: ").append(message.content).append("\n\n")
-                Role.USER -> append("User: ").append(message.content).append("\n\n")
-                Role.ASSISTANT -> append("Assistant: ").append(message.content).append("\n\n")
-                Role.TOOL -> append("Tool result: ").append(message.content).append("\n\n")
+                Role.USER -> append(message.content)
+                Role.ASSISTANT -> append("Earlier answer: ").append(message.content)
+                Role.TOOL -> append("Tool result: ").append(message.content)
+                Role.SYSTEM -> Unit
             }
+            append("\n\n")
         }
-        append("Assistant: ")
-    }
+    }.trim()
 }

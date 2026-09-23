@@ -1,7 +1,11 @@
 package com.recorder.app.ui
 
 import android.app.Application
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
+import com.recorder.app.BuildConfig
+import com.recorder.core.asr.AsrEngineFactory
+import com.recorder.core.llm.local.LocalModelRuntime
 import androidx.lifecycle.viewModelScope
 import com.recorder.app.ServiceLocator
 import com.recorder.app.service.RecordingService
@@ -137,13 +141,40 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         settings.providerModel.first(),
     )
 
-    /** Reported in settings so it is obvious why a local heavy model is or isn't offered. */
+    /**
+     * Reported in Settings so what actually shipped on this phone is visible without a
+     * computer: which native runtimes are in the APK, whether their model files arrived,
+     * and why a local heavy model is or isn't offered.
+     */
     fun deviceSummary(): String {
         val context = getApplication<Application>()
         val selector = LocalModelSelector(context)
         val tier = DeviceCapabilities.ramTier(context)
         val ram = "%.1f".format(DeviceCapabilities.totalRamGb(context))
-        val heavy = selector.heavyUnavailableReason() ?: "Available: ${selector.heavyModelCandidate()?.label}"
-        return "RAM ${ram} GB · tier $tier\nLocal heavy model — $heavy"
+        val heavy = selector.heavyUnavailableReason()
+            ?: "available (${selector.heavyModelCandidate()?.label})"
+
+        val asr = when {
+            !AsrEngineFactory.sherpaBundled -> "not bundled in this build"
+            !AsrEngineFactory.modelsInstalled(context) -> "runtime ${AsrEngineFactory.sherpaVersion}, model not downloaded"
+            else -> "runtime ${AsrEngineFactory.sherpaVersion}, model installed"
+        }
+
+        val llm = when {
+            !LocalModelRuntime.available -> "not bundled in this build"
+            else -> "llama.cpp @ ${LocalModelRuntime.commit}" +
+                (LocalModelRuntime.current?.let { ", loaded: $it" } ?: ", idle")
+        }
+
+        return """
+            Device: ${Build.MANUFACTURER} ${Build.MODEL}
+            Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})
+            RAM ${ram} GB · tier $tier
+            App ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})
+
+            Speech recognition: $asr
+            Local AI runtime: $llm
+            Local heavy model: $heavy
+        """.trimIndent()
     }
 }

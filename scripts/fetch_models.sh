@@ -16,7 +16,9 @@
 #   SILERO_URL=... SHERPA_AAR_URL=... PARAKEET_URL=... ./scripts/fetch_models.sh --all
 set -uo pipefail
 
-PKG="${PKG:-com.recorder.app}"
+# run-as only works against a debuggable build, so this defaults to the debug applicationId.
+# For the signed release build, models are downloaded by the in-app wizard instead.
+PKG="${PKG:-com.recorder.app.debug}"
 WORK_DIR="${WORK_DIR:-$(cd "$(dirname "$0")/.." && pwd)/.models}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -93,14 +95,13 @@ do_asr() {
 do_llama() {
   echo "== llama.cpp Android AAR =="
   cat <<'NOTE'
-  llama.cpp does not publish a prebuilt Android AAR. Build it once:
+  CI already builds this and bundles it into the released APK, so you normally need
+  nothing here. To build it locally (needs the Android SDK, NDK and CMake):
 
-    git clone https://github.com/ggml-org/llama.cpp
-    cd llama.cpp/examples/llama.android
-    ./gradlew :llama:assembleRelease
-    cp llama/build/outputs/aar/llama-release.aar <this repo>/core-llm/libs/
+    ./scripts/ci/prepare_natives.sh
 
-  Then rebuild the APK; the on-device model provider compiles in automatically.
+  That fetches the pinned sherpa-onnx AAR and builds llama.cpp's Android library
+  (examples/llama.android, module :lib) at the pinned commit into core-llm/libs/.
 NOTE
 }
 

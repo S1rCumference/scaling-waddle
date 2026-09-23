@@ -15,6 +15,49 @@ bigger phone without a rewrite.
 
 ---
 
+## Release signing (one-time, needed before a tagged release can publish)
+
+Every build must be signed with the *same* key, or installing a new version over an old
+one fails with a signature mismatch. Run these on any computer with the JDK installed
+(`keytool` ships with it), then paste the four values into the repo's secrets.
+
+```bash
+# 1. Generate the keystore. Use a long passphrase and keep this file safe:
+#    lose it and you cannot update an installed app ever again, only uninstall and reinstall.
+keytool -genkeypair -v \
+  -keystore release.keystore \
+  -alias recorder \
+  -keyalg RSA -keysize 4096 -validity 10000 \
+  -storetype PKCS12 \
+  -dname "CN=Local Recorder, O=Personal, C=US"
+
+# 2. Print the base64 of the keystore (single line, no wrapping).
+base64 -w0 release.keystore    # macOS: base64 -i release.keystore | tr -d '\n'
+```
+
+Then in GitHub: **Settings → Secrets and variables → Actions → New repository secret**, and
+add four secrets:
+
+| Secret | Value |
+|---|---|
+| `KEYSTORE_BASE64` | the single-line base64 from step 2 |
+| `KEYSTORE_PASSWORD` | the keystore passphrase from step 1 |
+| `KEY_ALIAS` | `recorder` |
+| `KEY_PASSWORD` | the key passphrase (the same one, unless you set a separate one) |
+
+Back up `release.keystore` somewhere off the computer. It is the only thing that lets a
+future build update an installed app.
+
+To cut a release once the secrets exist:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+That builds both flavours signed, verifies the signatures, writes `SHA256SUMS`, and
+publishes them as a GitHub Release. `versionCode` is derived from the tag
+(`0.2.0` → `200`), so the in-app updater can compare versions.
+
 ## Getting an APK on the phone
 
 You do not need Android Studio or a local SDK. Every push builds installable APKs in CI.

@@ -15,3 +15,8 @@ models/*.bin
 *.keystore
 *.jks
 !debug.keystore
+core-asr/libs/*.aar
+core-llm/libs/*.aar
+core-llm/libs/*.jar
+core-asr/libs/*.jar
+.models/

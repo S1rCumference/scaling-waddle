@@ -45,6 +45,16 @@ object AsrEngineFactory {
     private const val TAG = "AsrEngineFactory"
     private const val SHERPA_PLUGIN = "com.recorder.core.asr.SherpaAsrEnginePlugin"
 
+    /** Whether the sherpa-onnx AAR was bundled into this build at all. */
+    val sherpaBundled: Boolean get() = BuildConfig.SHERPA_AVAILABLE
+
+    /** Version of the bundled sherpa-onnx AAR, or "none". */
+    val sherpaVersion: String get() = BuildConfig.SHERPA_VERSION
+
+    /** True once the Parakeet model files are present alongside the runtime. */
+    fun modelsInstalled(context: Context): Boolean =
+        AsrModels.asrDir(context).listFiles()?.isNotEmpty() == true
+
     /**
      * Picks the best engine actually available on this device: the sherpa-onnx Parakeet
      * engine when both its AAR and model files are present, otherwise a no-op engine.

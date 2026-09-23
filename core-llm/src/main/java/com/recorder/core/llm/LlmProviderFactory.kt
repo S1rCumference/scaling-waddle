@@ -36,6 +36,12 @@ class LlmProviderFactory(
         else -> OpenAiCompatibleProvider(config, id)
     }
 
-    /** The always-available small model used by the cover-screen chat. Never touches the network. */
-    fun onDeviceSmallModel(): LocalModelProvider = LocalModelProvider(context, heavy = false)
+    /**
+     * The always-available small model used by the cover-screen chat. Never touches the
+     * network. Memoised because callers ask per question, and a fresh provider per question
+     * used to mean a fresh model load per question.
+     */
+    private val smallModel: LocalModelProvider by lazy { LocalModelProvider(context, heavy = false) }
+
+    fun onDeviceSmallModel(): LocalModelProvider = smallModel
 }
