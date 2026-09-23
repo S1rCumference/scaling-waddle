@@ -9,4 +9,10 @@
     <string name="notification_recording">Listening · %1$s VAD · %2$s</string>
     <string name="notification_no_permission">Microphone permission needed</string>
     <string name="notification_error">Recording stopped after an error</string>
+    <string name="resume_title">Recording is paused</string>
+    <string name="resume_action">Resume recording</string>
+    <string name="resume_reason_boot">Tap to start listening again after the restart.</string>
+    <string name="resume_reason_stopped">Recording stopped unexpectedly. Tap to start it again.</string>
+    <string name="resume_channel_name">Resume recording</string>
+    <string name="resume_channel_description">Shown when recording needs a tap to start.</string>
 </resources>

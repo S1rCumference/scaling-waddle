@@ -69,14 +69,16 @@ class RecordingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Restarted by the system, by BOOT_COMPLETED, or by the UI toggle — all the same here.
+        // Reaching here at all means the start was permitted, so clear any resume prompt.
+        ResumeNotifier.clear(this)
         return START_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Swiping the app away must not stop recording.
+        // A foreground service already survives the task being swiped away, and the old
+        // self-restart here was both unnecessary and illegal: starting a microphone service
+        // from the background throws SecurityException on Android 14+.
         super.onTaskRemoved(rootIntent)
-        start(this)
     }
 
     override fun onDestroy() {
@@ -174,9 +176,34 @@ class RecordingService : Service() {
         /** Observable so the UI can show whether recording is actually running. */
         val state: StateFlow<RecorderState> = _state.asStateFlow()
 
-        fun start(context: Context) {
-            val intent = Intent(context, RecordingService::class.java)
-            ContextCompat.startForegroundService(context, intent)
+        const val ACTION_RESUME = "com.recorder.app.action.RESUME"
+
+        /**
+         * Starts recording, reporting refusal instead of crashing.
+         *
+         * A microphone foreground service can be refused for reasons the caller cannot
+         * check in advance — the app being in the background at that instant, or an OEM
+         * restriction. Callers decide what to do about it; most post the resume
+         * notification, which is itself an exemption.
+         */
+        fun start(context: Context): Result<Unit> = runCatching {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, RecordingService::class.java),
+            )
+        }.onFailure { error ->
+            val blocked = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                error is android.app.ForegroundServiceStartNotAllowedException
+            when {
+                blocked -> Log.w(TAG, "foreground start not allowed from here", error)
+                error is SecurityException ->
+                    // The while-in-use case: the system does not consider the microphone
+                    // permission held because the app is in the background.
+                    Log.w(TAG, "microphone not available to a background start", error)
+
+                else -> Log.w(TAG, "could not start recording", error)
+            }
+            _state.value = RecorderState.STOPPED
         }
 
         fun stop(context: Context) {

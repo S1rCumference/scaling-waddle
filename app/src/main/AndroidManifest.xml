@@ -75,10 +75,32 @@
             android:name=".service.BootReceiver"
             android:enabled="true"
             android:exported="true">
+            <!--
+                LOCKED_BOOT_COMPLETED is deliberately absent. The app is not direct-boot
+                aware and its database lives in credential-encrypted storage, so there is
+                nothing useful it could do before the first unlock.
+            -->
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            Present so the app can be made device owner, which is the only way a microphone
+            foreground service may start after a reboot without a human tapping something.
+            Opt-in, and removable from Settings without a factory reset.
+        -->
+        <receiver
+            android:name=".admin.RecorderDeviceAdminReceiver"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+                <action android:name="android.app.action.PROFILE_PROVISIONING_COMPLETE" />
             </intent-filter>
         </receiver>
     </application>

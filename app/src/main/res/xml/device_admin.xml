@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Minimal policy set. This app is device owner only to keep recording alive across
+    reboots; it deliberately asks for no policy that would let it lock, wipe or spy on the
+    phone beyond what the recorder already does.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <disable-keyguard-features />
+    </uses-policies>
+</device-admin>

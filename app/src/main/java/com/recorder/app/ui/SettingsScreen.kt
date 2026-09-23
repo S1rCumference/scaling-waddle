@@ -193,6 +193,42 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
             Button(onClick = onRunSetup) { Text("Run setup again") }
         }
 
+        Section("Surviving a reboot") {
+            Text(
+                viewModel.deviceOwnerStatus(),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "Android will not let any app start microphone recording in the background " +
+                    "after a reboot. The only exceptions are a tap on a notification, or " +
+                    "this app being the phone's device owner.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            if (viewModel.deviceOwnerActive()) {
+                Button(onClick = viewModel::removeDeviceOwner) { Text("Remove device owner") }
+                Text(
+                    "Removing it does not wipe the phone; recording simply needs one tap " +
+                        "after each restart.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else {
+                Text(
+                    "To enable it, run this once from Shizuku or adb on a phone with no " +
+                        "accounts added:",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                    Text(
+                        viewModel.deviceOwnerCommand(),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(10.dp),
+                    )
+                }
+            }
+        }
+
         Section("This device") {
             Card(Modifier.fillMaxWidth()) {
                 Text(

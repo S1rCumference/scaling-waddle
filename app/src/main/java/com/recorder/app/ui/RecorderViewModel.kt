@@ -4,6 +4,7 @@ import android.app.Application
 import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import com.recorder.app.BuildConfig
+import com.recorder.app.admin.DeviceOwner
 import com.recorder.core.asr.AsrEngineFactory
 import com.recorder.core.llm.local.LocalModelRuntime
 import androidx.lifecycle.viewModelScope
@@ -133,6 +134,23 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     fun rejectDraft(id: Long) = viewModelScope.launch {
         ServiceLocator.connectorGateway.reject(id)
+    }
+
+    private val deviceOwner by lazy { DeviceOwner(getApplication<Application>()) }
+
+    fun deviceOwnerActive(): Boolean = deviceOwner.isActive
+
+    fun deviceOwnerStatus(): String = deviceOwner.statusText()
+
+    /** The shell command that grants device owner; shown so it can be run via Shizuku or adb. */
+    fun deviceOwnerCommand(): String =
+        DeviceOwner.setupCommand(getApplication<Application>().packageName)
+
+    fun removeDeviceOwner() {
+        _status.value = deviceOwner.clear().fold(
+            onSuccess = { "Device owner removed. Recording will need a tap after a reboot." },
+            onFailure = { "Could not remove device owner: ${it.message}" },
+        )
     }
 
     fun clearStatus() {
