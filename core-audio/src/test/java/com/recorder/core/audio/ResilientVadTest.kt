@@ -66,10 +66,11 @@ class ResilientVadTest {
         val deaf = Stub(probability = 0.01f)
         val vad = ResilientVad(primary = deaf, onFallback = { reason = it })
 
-        // Let the energy detector settle on a quiet floor first, then talk over it without
-        // a break — an unbroken run is what the test requires.
+        // Let the energy detector settle on a quiet floor first, then talk over it without a
+        // break. It takes thirty seconds of unbroken sound and two minutes of audio before
+        // the verdict is allowed, so this is deliberately more than a few frames.
         repeat(50) { vad.speechProbability(silence(), sampleRate) }
-        repeat(400) { vad.speechProbability(tone(), sampleRate) }
+        repeat(4_000) { vad.speechProbability(tone(), sampleRate) }
 
         assertTrue(vad.usingFallback)
         assertTrue(reason!!.contains("reporting speech"))
