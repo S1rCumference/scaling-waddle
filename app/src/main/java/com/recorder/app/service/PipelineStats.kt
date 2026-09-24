@@ -23,7 +23,6 @@ class PipelineStats {
     @Volatile private var transcribed = 0L
     @Volatile private var peak = 0f
     @Volatile private var bestProbability = 0f
-    @Volatile private var reportedTotal = 0L
 
     fun onFrame(samples: FloatArray, probability: Float, speaking: Boolean) {
         frames++
@@ -56,7 +55,6 @@ class PipelineStats {
         speechFrames = 0
         segments = 0
         transcribed = 0
-        reportedTotal += f
 
         if (f == 0L) {
             Diagnostics.w(tag, "no audio reached the recorder in the last minute")
