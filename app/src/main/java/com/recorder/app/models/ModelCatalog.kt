@@ -107,20 +107,53 @@ object ModelCatalog {
                 displayName = o.getString("displayName"),
                 fileName = o.getString("fileName"),
                 url = o.getString("url"),
-                revision = o.optString("revision"),
+                revision = o.text("revision").orEmpty(),
                 sizeBytes = o.getLong("sizeBytes"),
-                sha256 = o.optString("sha256").takeIf { it.isNotBlank() },
-                license = o.optString("license", "unknown"),
-                licenseUrl = o.optString("licenseUrl").takeIf { it.isNotBlank() },
+                // Only a real digest counts. Anything else — absent, JSON null, or a value
+                // that is not 64 hex characters — means size-checked only, which is what
+                // hashVerified:false in the manifest already says.
+                sha256 = o.text("sha256")?.lowercase()?.takeIf(::looksLikeSha256),
+                license = o.text("license") ?: "unknown",
+                licenseUrl = o.text("licenseUrl"),
                 minRamTier = RamTier.entries.firstOrNull {
-                    it.name.equals(o.optString("minRamTier"), true)
+                    it.name.equals(o.text("minRamTier"), true)
                 } ?: RamTier.LOW_8GB,
                 required = o.optBoolean("required", false),
-                archive = o.optString("archive").takeIf { it.isNotBlank() },
+                // An allowlist, not "is it non-blank": an unrecognised value means "not an
+                // archive", so a plain file is never handed to the archive unpacker.
+                archive = o.text("archive")?.takeIf { it in SUPPORTED_ARCHIVES },
                 hashVerified = o.optBoolean("hashVerified", false),
-                notes = o.optString("notes").takeIf { it.isNotBlank() },
+                notes = o.text("notes"),
             )
         }
+    }
+
+    /** The archive formats the installer can actually unpack. */
+    private val SUPPORTED_ARCHIVES = setOf("tar.bz2")
+
+    private fun looksLikeSha256(value: String): Boolean =
+        value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' }
+
+    /**
+     * A string field, or null when it is absent, empty, or JSON null.
+     *
+     * Android's `org.json` is not the reference implementation: its `optString` coerces a
+     * JSON null to the *four-character string* "null" rather than to an empty string, and
+     * only a missing key gives "". Every nullable field in this manifest is written as JSON
+     * null, so on a real phone `archive` came back as "null", the VAD was treated as an
+     * archive and failed with "Unsupported archive type: null", and `sha256` came back as
+     * "null", so every GGUF failed verification with "expected null, got <digest>" and was
+     * deleted. Only Parakeet — the one entry with no JSON nulls in it — ever installed.
+     *
+     * It did not show up in tests because the unit tests run against the reference
+     * `org.json` jar on the JVM, where the same code returns "" and behaves correctly.
+     * `isNull` means the same thing in both, so it is what this uses.
+     */
+    private fun JSONObject.text(name: String): String? {
+        if (isNull(name)) return null
+        // Belt and braces: a manifest that literally contains the string "null" is a mistake
+        // either way, and treating it as a value is how this bug behaved on the phone.
+        return optString(name).trim().takeIf { it.isNotEmpty() && it != "null" }
     }
 
     /**

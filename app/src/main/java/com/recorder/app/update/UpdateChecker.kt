@@ -80,7 +80,10 @@ class UpdateChecker(private val context: Context) {
                             apkUrl = asset.optString("browser_download_url"),
                             sizeBytes = asset.optLong("size"),
                             sha256 = null,
-                            notes = release.optString("body").take(500),
+                            // GitHub sends "body": null for a release with no notes, and
+                            // Android's optString turns that into the string "null" rather
+                            // than "" — see ModelCatalog.text().
+                            notes = release.nullableText("body").orEmpty().take(500),
                         )
                     }
                 }
@@ -151,6 +154,10 @@ class UpdateChecker(private val context: Context) {
      * versionCode is derived from the tag the same way the release workflow derives it, so
      * the comparison is meaningful rather than a string sort.
      */
+    /** A string field, or null when absent or JSON null. See ModelCatalog.text(). */
+    private fun JSONObject.nullableText(name: String): String? =
+        if (isNull(name)) null else optString(name).takeIf { it.isNotBlank() && it != "null" }
+
     private fun versionCodeOf(tag: String): Int {
         val parts = tag.substringBefore('-').split('.')
         val major = parts.getOrNull(0)?.toIntOrNull() ?: 0

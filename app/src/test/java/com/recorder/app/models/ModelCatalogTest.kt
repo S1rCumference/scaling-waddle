@@ -189,15 +189,87 @@ class ModelCatalogTest {
 
     @Test
     fun `a missing digest parses as null rather than an empty string`() {
+        assertTrue(shipped.any { it.sha256 == null })
+        assertFalse(shipped.any { it.sha256?.isBlank() == true })
+    }
+
+    /**
+     * The bug this pins down cost the phone every model but one.
+     *
+     * Android's org.json coerces a JSON null to the string "null", not to "", so
+     * `"archive": null` arrived as `archive == "null"`, the VAD was handed to the archive
+     * unpacker and failed with "Unsupported archive type: null", and `"sha256": null`
+     * arrived as a digest of "null", so every GGUF failed verification and was deleted.
+     *
+     * A JVM test cannot reproduce that coercion — the reference org.json used here returns
+     * "" — so these assert the shape that makes the coercion harmless: the literal string
+     * "null" is rejected wherever a value is optional, and archive and digest values are
+     * validated rather than merely checked for being non-blank.
+     */
+    @Test
+    fun `a literal null string is treated as absent, whatever the json implementation does`() {
         val json = """
             {"version":1,"models":[
-              {"id":"n","role":"small_chat","displayName":"y","fileName":"y.gguf",
-               "url":"https://example.com/y.gguf","sizeBytes":2,"sha256":""}
+              {"id":"m","role":"vad","displayName":"m","fileName":"m.onnx",
+               "url":"https://example.com/m.onnx","sizeBytes":1,
+               "archive":"null","sha256":"null","licenseUrl":"null","notes":"null"}
             ]}
         """.trimIndent()
-
         val entry = ModelCatalog.parse(json).single()
+        assertEquals(null, entry.archive)
         assertEquals(null, entry.sha256)
-        assertFalse(entry.hashVerified)
+        assertEquals(null, entry.licenseUrl)
+        assertEquals(null, entry.notes)
+    }
+
+    @Test
+    fun `json null and a missing key both parse as absent`() {
+        fun entry(body: String) = ModelCatalog.parse(
+            """{"version":1,"models":[{"id":"m","role":"vad","displayName":"m",
+               "fileName":"m.onnx","url":"https://e.com/m","sizeBytes":1$body}]}"""
+        ).single()
+
+        listOf(entry(""), entry(""","archive":null,"sha256":null""")).forEach {
+            assertEquals(null, it.archive)
+            assertEquals(null, it.sha256)
+        }
+    }
+
+    /** An archive type the installer cannot unpack must not be treated as an archive. */
+    @Test
+    fun `only supported archive formats are accepted`() {
+        val json = """
+            {"version":1,"models":[
+              {"id":"a","role":"asr","displayName":"a","fileName":"a.zip",
+               "url":"https://example.com/a.zip","sizeBytes":1,"archive":"zip"},
+              {"id":"b","role":"asr","displayName":"b","fileName":"b.tar.bz2",
+               "url":"https://example.com/b.tar.bz2","sizeBytes":1,"archive":"tar.bz2"}
+            ]}
+        """.trimIndent()
+        val parsed = ModelCatalog.parse(json)
+        assertEquals(null, parsed.first { it.id == "a" }.archive)
+        assertEquals("tar.bz2", parsed.first { it.id == "b" }.archive)
+    }
+
+    /** A digest that is not a SHA-256 is no digest: size-checked only beats failing forever. */
+    @Test
+    fun `a malformed digest is dropped rather than used`() {
+        val json = """
+            {"version":1,"models":[
+              {"id":"m","role":"vad","displayName":"m","fileName":"m.onnx",
+               "url":"https://example.com/m.onnx","sizeBytes":1,"sha256":"not-a-digest"}
+            ]}
+        """.trimIndent()
+        assertEquals(null, ModelCatalog.parse(json).single().sha256)
+    }
+
+    /** The shipped manifest must survive the same treatment: the VAD is not an archive. */
+    @Test
+    fun `the shipped vad is a plain file and parakeet is the only archive`() {
+        assertEquals(null, shipped.first { it.role == ModelRole.VAD }.archive)
+        assertEquals(
+            listOf("tar.bz2"),
+            shipped.mapNotNull { it.archive },
+        )
     }
 }

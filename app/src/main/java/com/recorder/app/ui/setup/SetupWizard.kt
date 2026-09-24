@@ -320,12 +320,14 @@ private fun ProgressLine(progress: InstallProgress, onRetry: () -> Unit) {
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.error,
             )
-            if (progress.retryable) {
-                TextButton(onClick = onRetry) { Text("Try again") }
-            } else {
+            // A retry button either way: "not retryable" means the same attempt will fail
+            // the same way, not that the user has no move. The screenshot that prompted this
+            // showed a bug being reported as "free up space", which was simply untrue.
+            TextButton(onClick = onRetry) { Text("Try again") }
+            if (!progress.retryable) {
                 Text(
-                    "This one will not fix itself by retrying — free up space or change the " +
-                        "setting it mentions first.",
+                    "Retrying alone may not be enough — if it says the same thing again, " +
+                        "Settings → Diagnostics has the detail worth sending on.",
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
