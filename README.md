@@ -51,18 +51,36 @@ device-owner QR path on a factory-reset phone, also on the install page. It is o
 | Enable GitHub Pages | Settings → Pages → Source: **GitHub Actions**. Until then the install page is not published. |
 | Run the benchmark and battery test | They need the phone. The tables below are empty for that reason. |
 
-## What it does
+## What it does (2.1)
 
-- **Live** — the transcript as it lands.
-- **Ask** — questions answered from your own transcripts by the on-device model. Works in
-  airplane mode: an FTS search pulls the relevant lines and only those go to the model.
-- **Flagged** — every hit on a trigger phrase. Defaults: *business idea, remind me, follow up,
-  email this, meeting*. Editable.
-- **Drafts** — anything the heavy tier wants to send. Approve or discard.
-- **Settings** — setup status, models, benchmark, power report, provider and key, connectors,
-  lockdown, and reboot behaviour.
+2.1 installs **beside** the stable app (`com.recorder.app.v21`, "Recorder 2.1", amber icon).
+Only one of the two can hold the microphone — Android silently feeds the other one silence —
+so 2.1 refuses to start while the other is recording, and shows a banner if it is ever
+silenced.
 
-Close the phone and the cover screen shows the live transcript and the same offline chat.
+One app on both screens. The cover and inner screens draw the same UI over the same shared
+state, so folding keeps your tab, open group, scroll position and Ask conversation. The
+layout is chosen by window size, never by the hinge, and recording never hears about it.
+
+- **Live** — the transcript as it lands, and today grouped by hour below it.
+- **Logs** — today by hour, earlier days by day, grouped automatically. A group shows the
+  original, corrected, or both side by side; exports; and has an Ask box scoped to it with
+  Summarise, Action items, Find mentions, Draft follow-up and Re-correct.
+- **Flags** — trigger-phrase hits, lines flagged from answers, and drafts awaiting approval.
+- **Settings** — models (a switcher per role), cloud AI, correction schedule, flag phrases,
+  export defaults, battery and setup status, updates, and *What the AI can do*.
+
+**Correction.** After transcription, the strongest local model that fits beside recording
+re-reads new lines with their context and fixes misheard words ("go through my contacts" →
+"content"). Batches run every 15 minutes on battery and 3 while charging (both settable),
+wait for a pause in speech, and skip below 20% battery. Overnight, while charging and idle,
+each day is re-corrected in full with the day's recurring names and terms as context.
+Corrections are stored beside the original, append-only, labelled with the pass and the
+model; the original is never changed. The cloud can be picked as the correction engine,
+but is only used while the heavy tier is switched on.
+
+**Export** a group, a day, a date range, or long-pressed lines; original, corrected or
+both; Markdown with timestamps or plain text; to the share sheet or `Download/Recorder/`.
 
 ## Measured numbers
 
@@ -237,8 +255,14 @@ available interface does not expose, so the five chat models ship size-checked o
 catches truncated downloads, not substituted files. The VAD and ASR models do have verified
 digests.
 
+**Correction speed is unmeasured.** On the 12 GB tier the corrector is Qwen 3 4B on the CPU.
+A 20-line batch is estimated at tens of seconds; the overnight pass over a long day at
+tens of minutes. Settings → Power report and the batch interval are how to tune it.
+
 **Chat quality is capped by the binding.** ARM's llama.cpp wrapper exposes no thread count, no
-context size, and no explicit chat template, and its Kotlin is built with a newer compiler than
+context size, and no explicit chat template, keeps chat history between calls, and only
+accepts a system prompt right after a load — so every task reloads the (memory-mapped)
+model for a clean conversation, and its Kotlin is built with a newer compiler than
 this project, so `-Xskip-metadata-version-check` is in use. A purpose-built JNI wrapper would
 remove all three; the `LocalLlm` seam exists so that swap touches one file.
 

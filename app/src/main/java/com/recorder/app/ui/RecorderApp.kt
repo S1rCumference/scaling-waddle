@@ -46,6 +46,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -305,14 +308,28 @@ private fun ExpandedShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
 
 // ---------------------------------------------------------------- shared pieces
 
-/** A list state that remembers its position in [AppUiState], so it survives a fold. */
+/**
+ * A list state whose position lives in [AppUiState], so it survives a fold.
+ *
+ * Only the screen in front writes it. When a screen comes back to the front — the inner
+ * screen on unfolding, say, after you scrolled on the cover — it jumps to wherever the other
+ * one left off rather than to where it was itself.
+ */
 @Composable
 fun rememberSharedListState(key: String): LazyListState {
     val saved = AppUiState.scroll[key]
     val state = rememberLazyListState(saved?.index ?: 0, saved?.offset ?: 0)
-    LaunchedEffect(key, state) {
-        snapshotFlow { state.firstVisibleItemIndex to state.firstVisibleItemScrollOffset }
-            .collect { (index, offset) -> AppUiState.scroll[key] = ScrollPos(index, offset) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(key, state, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            AppUiState.scroll[key]?.let { pos ->
+                if (pos.index != state.firstVisibleItemIndex || pos.offset != state.firstVisibleItemScrollOffset) {
+                    state.scrollToItem(pos.index, pos.offset)
+                }
+            }
+            snapshotFlow { state.firstVisibleItemIndex to state.firstVisibleItemScrollOffset }
+                .collect { (index, offset) -> AppUiState.scroll[key] = ScrollPos(index, offset) }
+        }
     }
     return state
 }
