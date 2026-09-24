@@ -1,6 +1,7 @@
 package com.recorder.app.export
 
 import com.recorder.app.ui.LineView
+import com.recorder.core.storage.Clocks
 import com.recorder.core.storage.CorrectionPass
 import com.recorder.core.storage.DayKey
 import com.recorder.core.storage.ExportDefaults
@@ -10,6 +11,7 @@ import java.util.TimeZone
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 class ExportFormatterTest {
@@ -24,6 +26,15 @@ class ExportFormatterTest {
             SegmentCorrection(segmentId = segment.id, text = it, pass = CorrectionPass.END_OF_DAY, engine = "Qwen 3 4B (on this phone)")
         }
         return LineView(segment, correction)
+    }
+
+    /**
+     * Exports follow the app's clock setting, so these assertions pin it rather than
+     * inheriting whatever the default happens to be. The 12-hour case is covered below.
+     */
+    @Before
+    fun use24HourClock() {
+        Clocks.set(true)
     }
 
     private val lines = listOf(
@@ -52,6 +63,14 @@ class ExportFormatterTest {
         val txt = ExportFormatter.render("t", lines, ExportDefaults.CONTENT_ORIGINAL, ExportDefaults.FORMAT_TEXT, day, zone)
         assertTrue("[14:02:00] go through my contacts" in txt)
         assertFalse("#" in txt)
+    }
+
+    @Test
+    fun `a twelve-hour export reads as a twelve-hour clock`() {
+        Clocks.set(false)
+        val txt = ExportFormatter.render("t", lines, ExportDefaults.CONTENT_ORIGINAL, ExportDefaults.FORMAT_TEXT, day, zone)
+        assertTrue("2:02:00" in txt)
+        assertFalse("[14:02:00]" in txt)
     }
 
     @Test
