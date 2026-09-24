@@ -3,6 +3,7 @@ package com.recorder.app.export
 import com.recorder.app.ui.LineView
 import com.recorder.core.storage.CorrectionPass
 import com.recorder.core.storage.ExportDefaults
+import com.recorder.core.storage.Clocks
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -26,9 +27,12 @@ object ExportFormatter {
     ): String {
         val markdown = format == ExportDefaults.FORMAT_MARKDOWN
         val day = fmt("EEEE d MMMM yyyy", zone)
-        val hour = fmt("HH:00", zone)
-        val clock = fmt("HH:mm:ss", zone)
-        val stamp = fmt("yyyy-MM-dd HH:mm", zone)
+        // Exports follow the clock the app is set to, so a file reads the way the screen
+        // it came from did.
+        val twelve = !Clocks.use24Hour.value
+        val hour = fmt(if (twelve) "h:00 a" else "HH:00", zone)
+        val clock = fmt(if (twelve) "h:mm:ss a" else "HH:mm:ss", zone)
+        val stamp = fmt(if (twelve) "yyyy-MM-dd h:mm a" else "yyyy-MM-dd HH:mm", zone)
 
         val multiDay = lines.map { day.format(Date(it.segment.startTs)) }.distinct().size > 1
         val multiHour = lines.map { hour.format(Date(it.segment.startTs)) + day.format(Date(it.segment.startTs)) }

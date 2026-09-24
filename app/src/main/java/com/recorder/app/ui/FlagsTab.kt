@@ -20,13 +20,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.recorder.core.storage.Clocks
 import com.recorder.core.storage.PendingAction
 import com.recorder.core.storage.TranscriptSegment
-import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val WHEN = SimpleDateFormat("EEE HH:mm", Locale.getDefault())
 
 /**
  * Flags: every trigger-phrase hit and every line flagged from a question. Drafts waiting for
@@ -75,7 +74,7 @@ fun FlagsTab(viewModel: RecorderViewModel) {
                         fontSize = 13.sp,
                         modifier = Modifier.weight(1f),
                     )
-                    Text(WHEN.format(Date(flag.createdTs)), color = CoverColors.dim, fontSize = 11.sp)
+                    Text(Clocks.dayAndTime(flag.createdTs), color = CoverColors.dim, fontSize = 11.sp)
                 }
                 Text(
                     segment?.text ?: "(line no longer stored)",

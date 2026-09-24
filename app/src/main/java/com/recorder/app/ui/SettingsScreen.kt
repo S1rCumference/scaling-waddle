@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import com.recorder.app.models.InstallProgress
 import com.recorder.app.correction.SummaryRunner
 import com.recorder.app.service.RecordingService
+import com.recorder.core.storage.Clocks
 import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
 import com.recorder.core.storage.ModelChoice
@@ -57,6 +58,14 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
     var googleClientSecret by remember { mutableStateOf("") }
     var googleRefreshToken by remember { mutableStateOf("") }
 
+    val use24Hour by viewModel.use24HourClock.collectAsState()
+    // Collected here so each row can show its current value without being opened, which is
+    // the common reason for coming to this screen at all.
+    val threshold by viewModel.vadThreshold.collectAsState()
+    val taughtCount by viewModel.taughtCorrections.collectAsState()
+    val pendingCount by viewModel.pendingCorrections.collectAsState()
+    val correctionOn by viewModel.correctionEnabled.collectAsState()
+
     LaunchedEffect(Unit) {
         val (id, savedEndpoint, savedModel) = viewModel.providerSettings()
         if (id.isNotBlank()) selectedProvider = id
@@ -67,11 +76,57 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(if (LocalCompact.current) 4.dp else 16.dp),
     ) {
-        Section("Microphone sensitivity", "mic") { MicSensitivitySection(viewModel) }
+        Group("Recording") {
+        Section("Microphone sensitivity", "mic", value = "Opens a segment at ${"%.2f".format(threshold)}") { MicSensitivitySection(viewModel) }
+            Section("Times", "clock", value = if (use24Hour) "24-hour" else "12-hour") {
+                Choice(
+                    "Clock",
+                    listOf("12-hour" to false, "24-hour" to true),
+                    use24Hour,
+                ) { viewModel.setUse24HourClock(it) }
+                Text(
+                    "Applies everywhere a time is shown: the live feed, the logs, " +
+                        "diagnostics and exports.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        Section("Flag phrases", "flags", value = if (triggers.isEmpty()) "None set" else "${triggers.size} phrase(s)") {
+            Text(
+                "Comma separated. Any transcript line containing one of these gets flagged.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            OutlinedTextField(
+                value = triggerText,
+                onValueChange = { triggerText = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Triggers") },
+            )
+            Button(
+                onClick = {
+                    viewModel.saveTriggers(
+                        triggerText.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet(),
+                    )
+                },
+            ) { Text("Save triggers") }
+        }
+        }
+        Group("AI") {
         Section("Models", "models") { ModelsSection(viewModel, onRunSetup) }
-        Section("Correction", "correction") { CorrectionSection(viewModel) }
-        Section("What the AI has been taught", "taught") { TaughtSection(viewModel) }
-        Section("Cloud AI (optional)", "cloud") {
+        Section(
+            "Correction",
+            "correction",
+            value = when {
+                !correctionOn -> "Off"
+                pendingCount > 0 -> "$pendingCount line(s) waiting"
+                else -> "Nothing waiting"
+            },
+        ) { CorrectionSection(viewModel) }
+        Section(
+            "What the AI has been taught",
+            "taught",
+            value = if (taughtCount.isEmpty()) "Nothing yet" else "${taughtCount.size} correction(s)",
+        ) { TaughtSection(viewModel) }
+        Section("Cloud AI (optional)", "cloud", value = if (heavyEnabled) "On" else "Off") {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Switch(
                     checked = heavyEnabled,
@@ -135,79 +190,10 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
                 TextButton(onClick = viewModel::syncNow) { Text("Sync now") }
             }
         }
-        Section("Flag phrases", "flags") {
-            Text(
-                "Comma separated. Any transcript line containing one of these gets flagged.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            OutlinedTextField(
-                value = triggerText,
-                onValueChange = { triggerText = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Triggers") },
-            )
-            Button(
-                onClick = {
-                    viewModel.saveTriggers(
-                        triggerText.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet(),
-                    )
-                },
-            ) { Text("Save triggers") }
-        }
-        Section("Export defaults", "export") { ExportDefaultsSection(viewModel) }
-        Section("Battery and setup status", "status") {
-            val context = LocalContext.current
-            // Recomputed on each recomposition on purpose: these can change behind the app's
-            // back, so a cached answer would be a lie.
-            viewModel.setupChecks().forEach { check ->
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.Top,
-                ) {
-                    Text(
-                        if (check.ok) "✓" else "✗",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(end = 10.dp),
-                    )
-                    Column(Modifier.weight(1f)) {
-                        Text(check.label, style = MaterialTheme.typography.bodyMedium)
-                        Text(check.detail, style = MaterialTheme.typography.bodySmall)
-                    }
-                    if (!check.ok) {
-                        check.fix?.let { fix ->
-                            TextButton(onClick = { fix(context) }) { Text(check.fixLabel) }
-                        }
-                    }
-                }
-            }
-        }
-        Section("Power report", "power") {
-            Card(Modifier.fillMaxWidth()) {
-                Text(
-                    viewModel.powerReport(),
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(12.dp),
-                )
-            }
-        }
-        Section("Updates", "updates") {
-            val updateText by viewModel.update.collectAsState()
-            Text(
-                "Downloads the newest release from GitHub and hands it to Android to install. " +
-                    "Same signing key, so it installs over the top.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Row {
-                Button(onClick = viewModel::checkForUpdate) { Text("Check for updates") }
-                if (viewModel.updateAvailable) {
-                    TextButton(onClick = viewModel::downloadUpdate) { Text("Download") }
-                }
-            }
-            updateText?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
-            }
-        }
         Section("What the AI can do", "ai") { CapabilitiesList() }
+        }
+        Group("Data") {
+        Section("Export defaults", "export") { ExportDefaultsSection(viewModel) }
         Section("Connectors", "connectors") {
             Text(
                 "Gmail, Calendar and Drive. Outbound actions are always queued as drafts for " +
@@ -249,13 +235,43 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
                 },
             ) { Text("Save Google credentials") }
         }
-        Section("Re-run setup", "setup") {
-            Text(
-                "Re-run the setup wizard to download or remove models, redo permissions, or " +
-                    "walk through the cover-screen settings again.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Button(onClick = onRunSetup) { Text("Run setup again") }
+        Section("Diagnostics", "diagnostics") { DiagnosticsSection(viewModel) }
+        }
+        Group("Device") {
+        Section("Battery and setup status", "status") {
+            val context = LocalContext.current
+            // Recomputed on each recomposition on purpose: these can change behind the app's
+            // back, so a cached answer would be a lie.
+            viewModel.setupChecks().forEach { check ->
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Text(
+                        if (check.ok) "✓" else "✗",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(end = 10.dp),
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(check.label, style = MaterialTheme.typography.bodyMedium)
+                        Text(check.detail, style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (!check.ok) {
+                        check.fix?.let { fix ->
+                            TextButton(onClick = { fix(context) }) { Text(check.fixLabel) }
+                        }
+                    }
+                }
+            }
+        }
+        Section("Power report", "power") {
+            Card(Modifier.fillMaxWidth()) {
+                Text(
+                    viewModel.powerReport(),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(12.dp),
+                )
+            }
         }
         Section("Surviving a reboot", "reboot") {
             Text(
@@ -292,27 +308,6 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
                 }
             }
         }
-        Section("Benchmark", "benchmark") {
-            val benchmarkText by viewModel.benchmark.collectAsState()
-            val running by viewModel.benchmarkRunning.collectAsState()
-            Text(
-                "Measures this phone with the installed model. The numbers in the README " +
-                    "come from running this here; they cannot be produced anywhere else.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Button(onClick = viewModel::runBenchmark, enabled = !running) {
-                Text(if (running) "Measuring…" else "Run benchmark")
-            }
-            benchmarkText?.let { report ->
-                Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                    Text(
-                        report,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(12.dp),
-                    )
-                }
-            }
-        }
         Section("Lock down this phone", "lockdown") {
             Text(
                 "Suspends the dialer, messaging, the Play Store and other apps so only the " +
@@ -342,7 +337,55 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
                 )
             }
         }
-        Section("Diagnostics", "diagnostics") { DiagnosticsSection(viewModel) }
+        }
+        Group("Advanced") {
+        Section("Benchmark", "benchmark") {
+            val benchmarkText by viewModel.benchmark.collectAsState()
+            val running by viewModel.benchmarkRunning.collectAsState()
+            Text(
+                "Measures this phone with the installed model. The numbers in the README " +
+                    "come from running this here; they cannot be produced anywhere else.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(onClick = viewModel::runBenchmark, enabled = !running) {
+                Text(if (running) "Measuring…" else "Run benchmark")
+            }
+            benchmarkText?.let { report ->
+                Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                    Text(
+                        report,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(12.dp),
+                    )
+                }
+            }
+        }
+        Section("Re-run setup", "setup") {
+            Text(
+                "Re-run the setup wizard to download or remove models, redo permissions, or " +
+                    "walk through the cover-screen settings again.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(onClick = onRunSetup) { Text("Run setup again") }
+        }
+        Section("Updates", "updates") {
+            val updateText by viewModel.update.collectAsState()
+            Text(
+                "Downloads the newest release from GitHub and hands it to Android to install. " +
+                    "Same signing key, so it installs over the top.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row {
+                Button(onClick = viewModel::checkForUpdate) { Text("Check for updates") }
+                if (viewModel.updateAvailable) {
+                    TextButton(onClick = viewModel::downloadUpdate) { Text("Download") }
+                }
+            }
+            updateText?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
+            }
+        }
+        }
     }
 }
 
@@ -354,7 +397,6 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
 @Composable
 private fun DiagnosticsSection(viewModel: RecorderViewModel) {
     val entries by viewModel.diagnostics.collectAsState()
-    val clock = remember { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()) }
 
     Text(
         "The last ${entries.size} things worth knowing about — recording starting or " +
@@ -382,7 +424,7 @@ private fun DiagnosticsSection(viewModel: RecorderViewModel) {
                 }
                 Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
                     Text(
-                        clock.format(java.util.Date(entry.timestamp)),
+                        Clocks.time(entry.timestamp),
                         color = color,
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.padding(end = 8.dp),
@@ -529,18 +571,55 @@ private fun relativeTime(ts: Long): String {
     }
 }
 
+/**
+ * A card of related rows. Five of these replaced seventeen top-level entries.
+ *
+ * Seventeen things in one flat accordion is a list you scroll rather than a place you
+ * navigate: nothing is grouped, so finding anything means reading all of it. Cards give the
+ * eye somewhere to land first, and each row carries its current value on the right so the
+ * common case — checking what something is set to — needs no tap at all.
+ */
 @Composable
-private fun Section(title: String, key: String, content: @Composable () -> Unit) {
+private fun Group(title: String, content: @Composable () -> Unit) {
+    Text(
+        title,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 4.dp, top = 14.dp, bottom = 4.dp),
+    )
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 2.dp)) { content() }
+    }
+}
+
+@Composable
+private fun Section(
+    title: String,
+    key: String,
+    /** The current state, shown inline so reading it does not require opening it. */
+    value: String? = null,
+    content: @Composable () -> Unit,
+) {
     val open by AppUiState.settingsSection.collectAsState()
     val expanded = open == key
-    Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+    Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth()
                 .clickable { AppUiState.settingsSection.value = if (expanded) null else key }
                 .padding(vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.bodyLarge)
+                value?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+            }
             Text(if (expanded) "−" else "+", style = MaterialTheme.typography.titleMedium)
         }
         if (expanded) {

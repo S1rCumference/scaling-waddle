@@ -550,6 +550,14 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     fun resetMicHighest() = MicLevels.resetHighest()
 
+    /** 24-hour or 12-hour, applied to every time the app shows. */
+    val use24HourClock: StateFlow<Boolean> = settings.use24HourClock
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    fun setUse24HourClock(use24: Boolean) = viewModelScope.launch {
+        settings.setUse24HourClock(use24)
+    }
+
     // --- Running work ----------------------------------------------------------------------
 
     /** Everything in flight, for the progress bar's elapsed time and Cancel button. */

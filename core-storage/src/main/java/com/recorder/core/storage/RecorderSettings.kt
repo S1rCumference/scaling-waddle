@@ -176,6 +176,15 @@ class RecorderSettings(private val context: Context) {
             )
         }
 
+    /**
+     * Whether times are shown on a 24-hour clock. Twelve-hour by default, which is what the
+     * phone this was built for uses.
+     */
+    val use24HourClock: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.USE_24_HOUR] ?: false }
+
+    suspend fun setUse24HourClock(use24: Boolean) = edit { it[Keys.USE_24_HOUR] = use24 }
+
     suspend fun recordCorrectionRun(durationMs: Long, lines: Int) = edit {
         it[Keys.LAST_RUN_TS] = System.currentTimeMillis()
         it[Keys.LAST_RUN_MS] = durationMs
@@ -203,6 +212,7 @@ class RecorderSettings(private val context: Context) {
             stringSetPreferencesKey("suspended_packages")
         val ASR_THREADS = intPreferencesKey("asr_threads")
         val VAD_THRESHOLD = floatPreferencesKey("vad_threshold")
+        val USE_24_HOUR = booleanPreferencesKey("use_24_hour_clock")
         val LAST_RUN_TS = longPreferencesKey("last_correction_run_ts")
         val LAST_RUN_MS = longPreferencesKey("last_correction_run_ms")
         val LAST_RUN_LINES = intPreferencesKey("last_correction_run_lines")

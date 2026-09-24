@@ -38,13 +38,14 @@ import androidx.compose.ui.unit.sp
 import com.recorder.core.storage.CorrectionPass
 import com.recorder.core.audio.SpeakerChange
 import com.recorder.core.audio.VoicePrint
+import com.recorder.core.storage.Clocks
 import com.recorder.core.storage.DayKey
 import com.recorder.core.storage.TranscriptSegment
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val CLOCK = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+
 
 /**
  * Logs: everything, grouped without anyone tagging anything — today by hour, earlier days by
@@ -136,8 +137,8 @@ private fun GroupList(viewModel: RecorderViewModel) {
                 month.days.forEach { day ->
                     val dayOpen = openDay == day.dayKey
                     item(key = "d${day.dayKey}") {
-                        val span = "${CLOCK_SHORT.format(Date(day.firstTs))}–" +
-                            CLOCK_SHORT.format(Date(day.lastTs))
+                        val span = "${Clocks.shortTime(day.firstTs)}–" +
+                            Clocks.shortTime(day.lastTs)
                         GroupRow(
                             title = GroupRef.day(day.dayKey).title(),
                             detail = "${day.count} lines · $span",
@@ -206,10 +207,11 @@ private fun SearchResult(
     onClick: () -> Unit,
 ) {
     val compact = LocalCompact.current
-    val stamp = SimpleDateFormat(
-        if (DayKey.of(segment.startTs) == DayKey.today()) "HH:mm" else "d MMM HH:mm",
-        Locale.getDefault(),
-    ).format(Date(segment.startTs))
+    val stamp = if (DayKey.of(segment.startTs) == DayKey.today()) {
+        Clocks.shortTime(segment.startTs)
+    } else {
+        Clocks.dayAndTime(segment.startTs)
+    }
 
     if (compact) {
         Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 6.dp)) {
@@ -268,7 +270,7 @@ private fun SectionLabel(text: String) {
     )
 }
 
-private val CLOCK_SHORT = SimpleDateFormat("HH:mm", Locale.getDefault())
+
 
 /** "September 2026" from a yyyyMM key. */
 private fun monthTitle(monthKey: Int): String {
@@ -416,7 +418,7 @@ private fun Lines(viewModel: RecorderViewModel, modifier: Modifier) {
                             .padding(vertical = 4.dp),
                     ) {
                         Text(
-                            CLOCK.format(Date(line.segment.startTs)) + if (line.changed) "  · corrected" else "",
+                            Clocks.time(line.segment.startTs) + if (line.changed) "  · corrected" else "",
                             color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.outline,
                             fontSize = 11.sp,
                         )

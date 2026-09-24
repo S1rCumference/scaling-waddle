@@ -1,12 +1,10 @@
 package com.recorder.app.ui
 
 import android.content.Context
+import com.recorder.core.storage.Clocks
 import com.recorder.core.storage.DayKey
 import com.recorder.core.storage.SegmentCorrection
 import com.recorder.core.storage.TranscriptSegment
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
@@ -32,21 +30,18 @@ data class GroupRef(val kind: GroupKind, val fromTs: Long, val toTs: Long) {
     fun title(now: Long = System.currentTimeMillis()): String = when (kind) {
         GroupKind.ALL -> "Everything"
         GroupKind.HOUR -> {
-            val day = if (DayKey.of(fromTs) == DayKey.of(now)) "Today" else DAY.format(Date(fromTs))
-            "$day ${HOUR.format(Date(fromTs))}–${HOUR.format(Date(toTs))}"
+            val day = if (DayKey.of(fromTs) == DayKey.of(now)) "Today" else Clocks.date(fromTs)
+            "$day ${Clocks.shortTime(fromTs)}–${Clocks.shortTime(toTs)}"
         }
         GroupKind.DAY -> when (DayKey.of(fromTs)) {
             DayKey.of(now) -> "Today"
-            DayKey.previous(DayKey.of(now)) -> "Yesterday · ${DAY.format(Date(fromTs))}"
-            else -> DAY.format(Date(fromTs))
+            DayKey.previous(DayKey.of(now)) -> "Yesterday · ${Clocks.date(fromTs)}"
+            else -> Clocks.date(fromTs)
         }
-        GroupKind.RANGE -> "${DAY.format(Date(fromTs))} – ${DAY.format(Date(toTs - 1))}"
+        GroupKind.RANGE -> "${Clocks.date(fromTs)} – ${Clocks.date(toTs - 1)}"
     }
 
     companion object {
-        private val HOUR = SimpleDateFormat("HH:mm", Locale.getDefault())
-        private val DAY = SimpleDateFormat("EEE d MMM", Locale.getDefault())
-
         val ALL = GroupRef(GroupKind.ALL, 0, Long.MAX_VALUE)
 
         fun hour(anyTs: Long): GroupRef {

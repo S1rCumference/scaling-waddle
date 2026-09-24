@@ -29,12 +29,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.recorder.app.service.RecordingService
 import kotlinx.coroutines.delay
+import com.recorder.core.storage.Clocks
 import com.recorder.core.storage.HourSummary
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
-private val SHORT_CLOCK = SimpleDateFormat("HH:mm", Locale.getDefault())
 
 /**
  * Live: the transcript as it lands, and today's logs grouped by hour below it. On the cover
@@ -105,14 +102,13 @@ private fun PauseBar(viewModel: RecorderViewModel) {
     val pausedUntil by viewModel.pausedUntil.collectAsState()
     if (state != RecordingService.RecorderState.RECORDING) return
 
-    val clock = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     Row(
         Modifier.fillMaxWidth().padding(vertical = if (compact) 0.dp else 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (pausedUntil > 0L) {
             Text(
-                "Paused until ${clock.format(Date(pausedUntil))}",
+                "Paused until ${Clocks.shortTime(pausedUntil)}",
                 color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = if (compact) 12.sp else 13.sp,
                 modifier = Modifier.weight(1f),
@@ -225,7 +221,7 @@ private fun LiveFeed(viewModel: RecorderViewModel, modifier: Modifier) {
         items(segments, key = { it.id }) { segment ->
             Column(Modifier.padding(vertical = 4.dp)) {
                 Text(
-                    SHORT_CLOCK.format(Date(segment.startTs)),
+                    Clocks.shortTime(segment.startTs),
                     color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.outline,
                     fontSize = 11.sp,
                 )
@@ -250,7 +246,7 @@ fun HourList(hours: List<HourSummary>, modifier: Modifier = Modifier, onOpen: (H
     LazyColumn(modifier.fillMaxWidth(), state = state) {
         items(hours, key = { it.bucket }) { hour ->
             val start = com.recorder.core.storage.DayKey.hourStart(hour.firstTs)
-            val label = "${SHORT_CLOCK.format(Date(start))}–${SHORT_CLOCK.format(Date(start + 3_600_000))}"
+            val label = "${Clocks.shortTime(start)}–${Clocks.shortTime(start + 3_600_000)}"
             if (compact) {
                 Row(Modifier.fillMaxWidth().clickable { onOpen(hour) }.padding(vertical = 8.dp)) {
                     Text(label, color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))

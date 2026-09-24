@@ -3,9 +3,6 @@ package com.recorder.core.storage
 import android.content.Context
 import android.util.Log
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,8 +15,8 @@ data class DiagnosticEntry(
 ) {
     enum class Level { INFO, WARN, ERROR }
 
-    fun render(clock: SimpleDateFormat): String =
-        "${clock.format(Date(timestamp))} ${level.name.padEnd(5)} $tag: $message"
+    fun render(): String =
+        "${Clocks.stamp(timestamp)} ${level.name.padEnd(5)} $tag: $message"
 }
 
 /**
@@ -125,11 +122,10 @@ object Diagnostics {
 
     /** Everything, oldest first, as plain text — for Copy and Share. [header] goes on top. */
     fun renderText(header: String): String {
-        val clock = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
         return buildString {
             append(header.trimEnd())
             append("\n\n")
-            _entries.value.asReversed().forEach { append(it.render(clock)).append('\n') }
+            _entries.value.asReversed().forEach { append(it.render()).append('\n') }
             if (_entries.value.isEmpty()) append("(nothing logged yet)\n")
         }
     }

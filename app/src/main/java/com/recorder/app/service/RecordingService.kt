@@ -294,8 +294,7 @@ class RecordingService : Service() {
         return until > 0L && System.currentTimeMillis() >= until
     }
 
-    private fun clock(ts: Long): String =
-        java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ts))
+    private fun clock(ts: Long): String = com.recorder.core.storage.Clocks.shortTime(ts)
 
     private fun vadName(): String = (vad as? ResilientVad)?.activeName ?: "energy"
 
