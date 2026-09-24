@@ -115,10 +115,13 @@ object SetupStatus {
     private fun speechModelCheck(context: Context) = SetupCheck(
         label = "Speech recognition installed",
         ok = AsrEngineFactory.sherpaBundled && AsrEngineFactory.modelsInstalled(context),
-        detail = if (!AsrEngineFactory.sherpaBundled) {
-            "This build does not contain the speech engine."
-        } else {
-            "Without the model the app records but writes nothing down."
+        detail = when {
+            !AsrEngineFactory.sherpaBundled -> "This build does not contain the speech engine."
+            // The reason, not just the verdict: "not downloaded" and "the download stopped
+            // part way" need different things done about them.
+            else -> AsrEngineFactory.modelProblem(context)
+                ?.let { "Not usable yet — $it. The app records but writes nothing down." }
+                ?: "The model is complete."
         },
     )
 

@@ -28,6 +28,7 @@ import com.recorder.core.audio.SileroVad
 import com.recorder.core.audio.SpeechSegmenter
 import com.recorder.core.audio.VoiceActivityDetector
 import com.recorder.core.audio.segmentSpeech
+import com.recorder.app.StartupGuard
 import com.recorder.app.diag.DeviceWatch
 import com.recorder.core.storage.Diagnostics
 import kotlinx.coroutines.CoroutineScope
@@ -282,6 +283,9 @@ class RecordingService : Service() {
         while (isActive) {
             delay(HEARTBEAT_MS)
             runCatching { stats.heartbeat(TAG) }
+            // A minute of actual recording is the proof a start survived, for a launch from
+            // boot that nobody is looking at.
+            runCatching { StartupGuard.markHealthy(this@RecordingService) }
             // Charging, heat and battery saver decide whether the AI may run at all, so a
             // change in any of them is worth a line with a time on it.
             runCatching { DeviceWatch.noteChanges(this@RecordingService) }
@@ -435,6 +439,11 @@ class RecordingService : Service() {
          * notification, which is itself an exemption.
          */
         fun start(context: Context): Result<Unit> = runCatching {
+            // Every path into recording comes through here — the screen, boot, the watchdog,
+            // the settings switch — so this is the one place safe mode has to hold.
+            check(!StartupGuard.safeMode) {
+                "safe mode: recording is not started automatically after a crash on start-up"
+            }
             ContextCompat.startForegroundService(
                 context,
                 Intent(context, RecordingService::class.java),

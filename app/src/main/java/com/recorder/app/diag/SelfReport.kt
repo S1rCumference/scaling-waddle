@@ -4,9 +4,12 @@ import android.content.Context
 import android.os.Build
 import com.recorder.app.BuildConfig
 import com.recorder.app.ServiceLocator
+import com.recorder.app.StartupGuard
 import com.recorder.app.correction.CorrectionGate
 import com.recorder.app.correction.CorrectionRunner
+import com.recorder.app.models.ModelHealth
 import com.recorder.app.service.RecordingService
+import com.recorder.core.asr.AsrEngineFactory
 import com.recorder.core.llm.local.LocalModelRuntime
 import com.recorder.core.storage.AiPasses
 import com.recorder.core.storage.Clocks
@@ -46,9 +49,15 @@ object SelfReport {
                 "(API ${Build.VERSION.SDK_INT})",
         )
         out.line("recorder state: ${RecordingService.state.value}")
+        if (StartupGuard.safeMode) {
+            out.line("SAFE MODE: start-up failed twice, so nothing was started and no model loaded")
+        } else if (StartupGuard.unhealthyStarts > 0) {
+            out.line("this start is not yet proven healthy (${StartupGuard.unhealthyStarts} unproven)")
+        }
         out.line(DeviceWatch.read(context).describe())
         out.line("automatic AI passes: ${CorrectionGate.describe(context).lowercase()}")
 
+        models(context, out)
         aiPasses(out)
         corrections(out)
         transcription(out)
@@ -57,6 +66,24 @@ object SelfReport {
         failures(out)
 
         return out.toString()
+    }
+
+    /**
+     * What is on disk and whether it is complete. First section on purpose: a model whose
+     * install never finished is the fault that explains the most other symptoms at once —
+     * no transcription, no corrections, and, until this release, a crash on every launch.
+     */
+    private fun models(context: Context, out: StringBuilder) {
+        out.section("MODELS")
+        val survey = ModelHealth.survey(context)
+        if (survey.isEmpty()) {
+            out.line("the model catalogue could not be read")
+            return
+        }
+        survey.forEach { (entry, problem) ->
+            out.line("  ${entry.displayName} (${entry.approxMb} MB) — ${problem ?: "complete"}")
+        }
+        out.line("speech model: ${AsrEngineFactory.modelProblem(context) ?: "loadable"}")
     }
 
     // --- AI ------------------------------------------------------------------------------

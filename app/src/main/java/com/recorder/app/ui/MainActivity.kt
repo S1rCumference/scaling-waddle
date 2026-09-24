@@ -15,6 +15,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.delay
+import com.recorder.app.StartupGuard
 import com.recorder.app.service.RecordingService
 import com.recorder.app.ui.setup.SetupViewModel
 import com.recorder.app.ui.setup.SetupWizard
@@ -37,6 +39,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
+            // A screen that has been up for a few seconds is a start that survived. Long
+            // enough to be past model loading, short enough that a real user never waits
+            // for it.
+            LaunchedEffect(Unit) {
+                delay(HEALTHY_AFTER_MS)
+                StartupGuard.markHealthy(this@MainActivity)
+            }
             val setupComplete by viewModel.setupComplete.collectAsState()
             var rerunSetup by remember { mutableStateOf(false) }
 
@@ -86,7 +95,13 @@ class MainActivity : ComponentActivity() {
      * beforehand, which could not be done reliably (see [com.recorder.app.service.MicConflict]).
      */
     private fun startRecording() {
+        if (StartupGuard.safeMode) return
         if (RecordingService.state.value == RecordingService.RecorderState.RECORDING) return
         RecordingService.start(this)
+    }
+
+    private companion object {
+        /** Past model loading, and short enough that nobody notices it. */
+        const val HEALTHY_AFTER_MS = 6_000L
     }
 }

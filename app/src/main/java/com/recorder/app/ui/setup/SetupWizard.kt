@@ -256,6 +256,20 @@ private fun ModelsStep(viewModel: SetupViewModel) {
             "${free / (1024 * 1024)} MB free on this phone.",
     )
 
+    // How far the whole queue has got, in one line. Per-model rows answer "is this one
+    // moving"; nothing answered "is any of this working", which is the question someone
+    // asks just before giving up and pressing Next.
+    val done = models.count { it.installed }
+    val missingRequired = models.count { it.entry.required && !it.installed }
+    Body("$done of ${models.size} model(s) fully installed.")
+    if (missingRequired > 0) {
+        Body(
+            "$missingRequired required model(s) are not finished yet. You can press Next and " +
+                "let them finish in the background — the app will simply not transcribe until " +
+                "they do, and it will not load a half-finished model. Nothing is lost either way.",
+        )
+    }
+
     val failed = models.count { it.progress is InstallProgress.Failed }
     if (failed > 0) {
         Body(
@@ -308,8 +322,12 @@ private fun ProgressLine(progress: InstallProgress, onRetry: () -> Unit) {
         is InstallProgress.Downloading -> Column(Modifier.padding(top = 6.dp)) {
             LinearProgressIndicator(progress = { progress.fraction }, modifier = Modifier.fillMaxWidth())
             Text(
-                "${progress.percent}% · ${progress.bytes / (1024 * 1024)} of " +
-                    "${progress.total / (1024 * 1024)} MB",
+                if (progress.bytes == 0L) {
+                    "Connecting… ${progress.total / (1024 * 1024)} MB to fetch"
+                } else {
+                    "${progress.percent}% · ${progress.bytes / (1024 * 1024)} of " +
+                        "${progress.total / (1024 * 1024)} MB"
+                },
                 style = MaterialTheme.typography.labelSmall,
             )
         }

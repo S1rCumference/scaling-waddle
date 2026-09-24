@@ -25,6 +25,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SILERO_URL="${SILERO_URL:-https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx}"
 SHERPA_VERSION="${SHERPA_VERSION:-1.10.32}"
 SHERPA_AAR_URL="${SHERPA_AAR_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VERSION}/sherpa-onnx-${SHERPA_VERSION}.aar}"
+# Must match the id in app/src/main/assets/models.json: the install record is named after it.
+ASR_MODEL_ID="parakeet-tdt-0.6b-v2-int8"
 PARAKEET_URL="${PARAKEET_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2}"
 
 mkdir -p "$WORK_DIR"
@@ -83,13 +85,23 @@ do_asr() {
   tar xjf "$WORK_DIR/parakeet.tar.bz2" -C "$WORK_DIR/parakeet" --strip-components=1 ||
     die "could not unpack the model archive"
 
-  local found=0
+  local found=0 items=""
   for f in "$WORK_DIR"/parakeet/{encoder,decoder,joiner}*.onnx "$WORK_DIR"/parakeet/tokens.txt; do
     [ -f "$f" ] || continue
     push_private "$f" "models/asr/$(basename "$f")"
+    items="$items{\"name\":\"$(basename "$f")\",\"size\":$(wc -c <"$f" | tr -d ' ')},"
     found=1
   done
   [ "$found" = 1 ] || die "archive did not contain encoder/decoder/joiner/tokens files"
+
+  # The app will not load a speech model without a record saying the install finished — a
+  # truncated .onnx takes the process down from inside onnxruntime, where nothing can catch
+  # it, so "these files exist" is not a claim it accepts. Push the same record the in-app
+  # installer writes, or the app will report the model as not downloaded.
+  local record="$WORK_DIR/.$ASR_MODEL_ID.install"
+  printf '{"version":1,"id":"%s","revision":"asr-models","completedTs":%s,"files":[%s]}' \
+    "$ASR_MODEL_ID" "$(date +%s)000" "${items%,}" >"$record"
+  push_private "$record" "models/asr/.$ASR_MODEL_ID.install"
 }
 
 do_llama() {

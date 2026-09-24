@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.darkColorScheme
+import com.recorder.app.StartupGuard
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -83,6 +84,50 @@ fun isCompactWindow(): Boolean {
  * The whole app, for both screens. One composable, one shared state ([AppUiState]), one
  * database: folding swaps the layout, not the place you were in.
  */
+/**
+ * The one thing worth interrupting the whole screen for: the app came up after start-up
+ * crashed twice, so it is deliberately doing nothing. Says what happened, offers the repair
+ * that fixes the cause, and offers to try normally again.
+ */
+@Composable
+private fun SafeModeBanner(viewModel: RecorderViewModel) {
+    if (!StartupGuard.safeMode) return
+    val repaired by viewModel.repairReport.collectAsState()
+
+    Surface(
+        Modifier.fillMaxWidth().padding(8.dp),
+        color = MaterialTheme.colorScheme.errorContainer,
+        shape = MaterialTheme.shapes.medium,
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Text(
+                "Safe mode",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Text(
+                "The app closed itself twice while starting, so nothing has been started and " +
+                    "no model has been loaded. The usual cause is a model whose download was " +
+                    "interrupted: remove the unfinished ones and download them again.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            repaired?.let {
+                Text(
+                    it,
+                    Modifier.padding(top = 6.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            }
+            Row(Modifier.padding(top = 6.dp)) {
+                TextButton(onClick = viewModel::repairModels) { Text("Remove unfinished models") }
+                TextButton(onClick = viewModel::leaveSafeMode) { Text("Start normally") }
+            }
+        }
+    }
+}
+
 @Composable
 fun RecorderApp(viewModel: RecorderViewModel, onRunSetup: () -> Unit) {
     val compact = isCompactWindow()
@@ -277,6 +322,7 @@ private fun ExpandedShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
             snackbarHost = { SnackbarHost(snackbar) },
         ) { padding ->
             Column(Modifier.padding(padding).fillMaxSize()) {
+                SafeModeBanner(viewModel)
                 BusyBar(viewModel)
                 Box(Modifier.fillMaxSize()) { TabContent(viewModel, underneath, onRunSetup) }
             }

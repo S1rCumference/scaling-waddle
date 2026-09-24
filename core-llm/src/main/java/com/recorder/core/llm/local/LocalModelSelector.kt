@@ -22,7 +22,22 @@ data class LocalModelSpec(
     val requiredFreeMb: Long,
     val path: String,
 ) {
-    val exists: Boolean get() = File(path).isFile
+    /**
+     * Null when the file is there and complete, otherwise why it will not be loaded.
+     *
+     * "The file is there" is not enough. A GGUF whose download was interrupted is a real file
+     * of the right name, and memory-mapping a truncated one is a native fault, not an
+     * exception — so whether the install actually finished is asked before the load, through
+     * the verifier the app installs on [LocalModelRuntime].
+     */
+    val problem: String?
+        get() {
+            val file = File(path)
+            if (!file.isFile) return "not downloaded"
+            return LocalModelRuntime.fileVerifier?.invoke(file)
+        }
+
+    val exists: Boolean get() = problem == null
 }
 
 /**

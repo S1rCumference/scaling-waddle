@@ -771,6 +771,48 @@ private fun ModelsSection(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
     Button(onClick = onRunSetup, modifier = Modifier.padding(top = 6.dp)) {
         Text("Open the models step")
     }
+
+    ModelFileCheck(viewModel)
+}
+
+/**
+ * Whether what is on disk is actually complete, and the one button that fixes it when it is
+ * not. "Installed" here means the exact byte count the manifest gives, or, for the speech
+ * model's unpacked archive, an install record written after the last file was in place — not
+ * "a file of that name exists", which is true of a download that stopped one byte in and is
+ * how a half-installed speech model took the whole app down on every launch.
+ */
+@Composable
+private fun ModelFileCheck(viewModel: RecorderViewModel) {
+    val repaired by viewModel.repairReport.collectAsState()
+    var survey by remember { mutableStateOf<List<Pair<String, String?>>?>(null) }
+
+    Text(
+        "Model files",
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier.padding(top = 10.dp),
+    )
+    Row {
+        TextButton(onClick = { survey = viewModel.modelSurvey() }) { Text("Check files") }
+        TextButton(onClick = viewModel::repairModels) { Text("Remove unfinished") }
+    }
+    survey?.let { rows ->
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(8.dp)) {
+                rows.forEach { (name, problem) ->
+                    Text(
+                        "$name — ${problem ?: "complete"}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (problem == null) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+    }
+    repaired?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+    }
 }
 
 @Composable

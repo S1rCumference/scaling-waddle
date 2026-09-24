@@ -103,6 +103,12 @@ class ModelInstaller(private val context: Context) {
             val dir = entry.destinationDir(context).apply { mkdirs() }
             val part = entry.partFile(context)
 
+            // Nothing is installed until this run says so. Dropping the old record first
+            // means an install that dies half way reads as unfinished rather than as the
+            // previous success it has just overwritten.
+            InstallRecord.delete(dir, entry.id)
+            entry.stagingDir(context).deleteRecursively()
+
             download(entry, part, onProgress)
 
             onProgress(InstallProgress.Verifying)
@@ -113,17 +119,35 @@ class ModelInstaller(private val context: Context) {
                 return@withContext fail(onProgress, problem, retryable = true)
             }
 
+            val installed: List<File>
             if (entry.archive != null) {
                 onProgress(InstallProgress.Extracting)
-                extract(entry, part, dir)
+                installed = extractAndPlace(entry, part, dir)
                 part.delete()
             } else {
                 val target = File(dir, entry.fileName)
                 if (!part.renameTo(target)) {
+                    // A copy is not atomic, so an interruption here leaves a short file.
+                    // The length check below is what catches that.
                     part.copyTo(target, overwrite = true)
                     part.delete()
                 }
+                if (entry.sizeBytes > 0 && target.length() != entry.sizeBytes) {
+                    target.delete()
+                    return@withContext fail(
+                        onProgress,
+                        "The file did not survive being put into place " +
+                            "(${target.length()} of ${entry.sizeBytes} bytes). Try again.",
+                        retryable = true,
+                    )
+                }
+                installed = listOf(target)
             }
+
+            // The record goes last, after every byte is in its final place. Anything that
+            // reads a model checks for it, so an install that stops before this line is an
+            // unfinished install rather than a plausible-looking broken one.
+            InstallRecord.write(dir, entry.id, entry.revision, installed)
 
             // The last thing checked is the thing that actually matters: that the file is
             // now where the model selector will look for it. Everything upstream can appear
@@ -169,6 +193,11 @@ class ModelInstaller(private val context: Context) {
         }
 
         val already = if (part.isFile) part.length() else 0L
+        // Before the request, not after the first megabyte of it. Connecting can take the
+        // best part of a minute on phone Wi-Fi, and a row that says nothing for that long is
+        // indistinguishable from a download that never started — which is exactly how this
+        // looked when it was reported as "the models aren't downloading".
+        onProgress(InstallProgress.Downloading(already, entry.sizeBytes))
         if (already > 0 && already == entry.sizeBytes) {
             onProgress(InstallProgress.Downloading(already, entry.sizeBytes))
             return
@@ -245,35 +274,74 @@ class ModelInstaller(private val context: Context) {
     }
 
     /**
-     * Unpacks a tar.bz2 into [dir], flattening directories and skipping the sample audio
-     * the sherpa model archives bundle. Entry names are sanitised so a malicious or
-     * malformed archive cannot write outside the target directory.
+     * Unpacks a tar.bz2 and only then puts the files where the app looks for them.
+     *
+     * The unpacking used to write straight into the model directory, which meant an
+     * interrupted extract left half-written .onnx files in the exact place a finished model
+     * belongs — and a truncated .onnx is what kills the process from native code when the
+     * recogniser loads it. So the archive is unpacked into a staging directory first, every
+     * member is checked against the size the archive declares for it, and the files are moved
+     * across only once all of that holds. A staging directory left behind by a failure is
+     * discarded on the next attempt and is never read by anything.
+     *
+     * Returns the files now installed, for the install record.
      */
-    private fun extract(entry: ModelEntry, archive: File, dir: File) {
+    private fun extractAndPlace(entry: ModelEntry, archive: File, dir: File): List<File> {
         require(entry.archive == "tar.bz2") { "Unsupported archive type: ${entry.archive}" }
 
-        TarArchiveInputStream(BZip2CompressorInputStream(archive.inputStream().buffered()))
-            .use { tar ->
-                while (true) {
-                    val item = tar.nextEntry ?: break
-                    if (item.isDirectory) continue
+        val staging = entry.stagingDir(context)
+        staging.deleteRecursively()
+        staging.mkdirs()
 
-                    val name = File(item.name).name
-                    if (name.isBlank() || name.startsWith(".")) continue
-                    // Only the model files matter; test_wavs and READMEs are dead weight.
-                    val wanted = name.endsWith(".onnx") || name == "tokens.txt"
-                    if (!wanted) continue
+        try {
+            val extracted = mutableListOf<File>()
+            TarArchiveInputStream(BZip2CompressorInputStream(archive.inputStream().buffered()))
+                .use { tar ->
+                    while (true) {
+                        val item = tar.nextEntry ?: break
+                        if (item.isDirectory) continue
 
-                    val target = File(dir, name)
-                    if (!target.canonicalPath.startsWith(dir.canonicalPath + File.separator)) {
-                        throw IOException("Archive entry escapes target directory: ${item.name}")
+                        val name = File(item.name).name
+                        if (name.isBlank() || name.startsWith(".")) continue
+                        // Only the model files matter; test_wavs and READMEs are dead weight.
+                        val wanted = name.endsWith(".onnx") || name == "tokens.txt"
+                        if (!wanted) continue
+
+                        val target = File(staging, name)
+                        if (!target.canonicalPath.startsWith(staging.canonicalPath + File.separator)) {
+                            throw IOException("Archive entry escapes target directory: ${item.name}")
+                        }
+                        val written = target.outputStream().use { out -> tar.copyTo(out) }
+                        // A truncated archive that bunzip2 accepted still ends a member early.
+                        if (item.size >= 0 && written != item.size) {
+                            throw IOException(
+                                "$name unpacked to $written bytes, but the archive says ${item.size}",
+                            )
+                        }
+                        extracted += target
                     }
-                    target.outputStream().use { out -> tar.copyTo(out) }
                 }
-            }
 
-        if (dir.listFiles().isNullOrEmpty()) {
-            throw IOException("Archive contained no model files")
+            val problem = when {
+                extracted.none { it.name.endsWith(".onnx") } -> "no .onnx model files"
+                extracted.none { it.name == "tokens.txt" } -> "no tokens.txt"
+                else -> null
+            }
+            if (problem != null) throw IOException("The archive unpacked but contained $problem")
+
+            return extracted.map { staged ->
+                val target = File(dir, staged.name)
+                target.delete()
+                if (!staged.renameTo(target)) {
+                    staged.copyTo(target, overwrite = true)
+                    if (target.length() != staged.length()) {
+                        throw IOException("${staged.name} was not copied into place completely")
+                    }
+                }
+                target
+            }
+        } finally {
+            staging.deleteRecursively()
         }
     }
 
@@ -286,15 +354,33 @@ class ModelInstaller(private val context: Context) {
         return Result.failure(IOException(reason))
     }
 
-    /** Removes an installed model, freeing its space. */
+    /** Removes an installed model, freeing its space. Also removes its install record. */
     fun uninstall(entry: ModelEntry) {
         val dir = entry.destinationDir(context)
+        InstallRecord.delete(dir, entry.id)
+        entry.stagingDir(context).deleteRecursively()
+        entry.partFile(context).delete()
         if (entry.archive != null) {
             // Archive-sourced models own their whole directory.
-            dir.listFiles()?.forEach { it.delete() }
+            dir.listFiles()?.forEach { it.deleteRecursively() }
         } else {
             File(dir, entry.fileName).delete()
         }
+    }
+
+    /**
+     * Throws away whatever is left of an unfinished install, so the next attempt starts from
+     * a clean directory instead of resuming something that cannot be finished. Returns true
+     * when there was something to clear.
+     *
+     * This is what the repair button in Settings calls, and it is the escape hatch for the
+     * one case this cannot fix by itself: a model installed by a version of the app that
+     * wrote no install record, which reads as unfinished and has to be fetched again.
+     */
+    fun discardIncomplete(entry: ModelEntry): Boolean {
+        if (entry.isInstalled(context)) return false
+        uninstall(entry)
+        return true
     }
 
     companion object {

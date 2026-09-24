@@ -57,25 +57,51 @@ data class ModelEntry(
         ModelRole.SMALL_CHAT, ModelRole.HEAVY -> LocalModelRuntime.modelDir(context)
     }
 
-    /** The in-progress download for this model, which is never evidence of an install. */
-    fun partFile(context: Context): File = File(destinationDir(context), "$fileName.part")
+    /**
+     * The in-progress download, kept outside the model directory entirely.
+     *
+     * It used to live beside the finished files, which is how a directory containing nothing
+     * but a half-downloaded archive still answered "yes" to every "is there a model here"
+     * check in the app. A partial download is not a model and now cannot be mistaken for one:
+     * it sits in the cache directory, where the system may also reclaim it if space runs out.
+     */
+    fun partFile(context: Context): File =
+        File(File(context.cacheDir, PART_DIR).apply { mkdirs() }, "$fileName.part")
+
+    /** Where an archive is unpacked before anything is moved into place. */
+    fun stagingDir(context: Context): File = File(destinationDir(context), ".staging-$id")
+
+    /** True when this model is complete and safe to hand to a model runtime. */
+    fun isInstalled(context: Context): Boolean = installProblem(context) == null
 
     /**
-     * True when this model is actually usable on disk.
+     * Null when the model is completely installed, otherwise why it is not — in a sentence
+     * that can be shown to the user.
      *
-     * The archive case used to accept "any non-empty file in the directory", and the
-     * in-progress `.part` download lives in exactly that directory — so a half-downloaded
-     * speech model reported itself installed, the wizard showed a tick, and transcription
-     * produced nothing. An unpacked sherpa model is a set of .onnx files plus tokens.txt, so
-     * that is what gets checked.
+     * A plain file is checked against the exact byte count in the manifest, which is the
+     * cheapest complete answer there is: a truncated or resumed-and-corrupted download is
+     * never the right length. An archive has no single expected size once it is unpacked, so
+     * it is checked against [InstallRecord], written at the end of a successful install.
+     *
+     * Both used to be "a file exists and is not empty", which is true of a download that was
+     * interrupted one byte in.
      */
-    fun isInstalled(context: Context): Boolean {
+    fun installProblem(context: Context): String? {
         val dir = destinationDir(context)
         if (archive == null) {
-            return File(dir, fileName).let { it.isFile && it.length() > 0 }
+            val file = File(dir, fileName)
+            if (!file.isFile) return "not downloaded yet"
+            if (sizeBytes > 0 && file.length() != sizeBytes) {
+                return "incomplete: ${file.length()} of $sizeBytes bytes"
+            }
+            return null
         }
-        val files = dir.listFiles()?.filter { it.isFile && it.length() > 0 }.orEmpty()
-        return files.any { it.name.endsWith(".onnx") } && files.any { it.name == "tokens.txt" }
+        return InstallRecord.problem(dir, id)
+    }
+
+    companion object {
+        /** Under cacheDir, so a partial download can never be read as an installed model. */
+        const val PART_DIR = "model-downloads"
     }
 }
 

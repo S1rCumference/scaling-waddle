@@ -49,7 +49,9 @@ import com.recorder.core.llm.ScopedLine
 import com.recorder.core.storage.DayKey
 import com.recorder.core.storage.CorrectionRunRecord
 import com.recorder.core.storage.DaySummary
+import com.recorder.app.StartupGuard
 import com.recorder.app.diag.SelfReport
+import com.recorder.app.models.ModelHealth
 import com.recorder.core.storage.Diagnostics
 import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
@@ -440,6 +442,44 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     fun clearSelfReport() {
         _selfReport.value = null
+    }
+
+    // --- models: is what is on disk actually complete ------------------------------------
+
+    private val _repairReport = MutableStateFlow<String?>(null)
+
+    /** What the last repair removed, or null before one has been asked for. */
+    val repairReport: StateFlow<String?> = _repairReport.asStateFlow()
+
+    /** Every model and what is wrong with it, recomputed on demand rather than cached. */
+    fun modelSurvey(): List<Pair<String, String?>> =
+        ModelHealth.survey(getApplication<Application>()).map { (entry, problem) -> entry.displayName to problem }
+
+    /**
+     * Removes what is left of every unfinished install. An interrupted download cannot be
+     * turned into a working model, and leaving it on disk is what makes the app look ready
+     * and behave broken.
+     */
+    fun repairModels() = viewModelScope.launch(Dispatchers.Default) {
+        val removed = ModelHealth.discardUnfinished(getApplication<Application>())
+        _repairReport.value = if (removed.isEmpty()) {
+            "Nothing to remove: every model on this phone is complete."
+        } else {
+            "Removed ${removed.size} unfinished install(s):\n" + removed.joinToString("\n")
+        }
+        _status.value = if (removed.isEmpty()) {
+            "Every model is complete"
+        } else {
+            "Removed ${removed.size} unfinished install(s)"
+        }
+    }
+
+    /** Leaves safe mode and starts recording, at the user's request. */
+    fun leaveSafeMode() {
+        val context = getApplication<Application>()
+        StartupGuard.clearSafeMode(context)
+        RecordingService.start(context)
+        _status.value = "Starting normally"
     }
 
     suspend fun segmentsByIds(ids: List<Long>): Map<Long, TranscriptSegment> =

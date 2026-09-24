@@ -39,6 +39,45 @@ object AsrModels {
 
     /** Directory holding the Parakeet encoder/decoder/joiner/tokens files. */
     fun asrDir(context: Context): File = File(modelDir(context), "asr")
+
+    /** What the transducer needs, by filename prefix. The `.int8` infix is allowed. */
+    private val REQUIRED_PARTS = listOf("encoder", "decoder", "joiner")
+
+    /**
+     * Below this, a file is not a model however it is named — the smallest of the three
+     * Parakeet graphs is several megabytes. This is what a part-written file looks like.
+     */
+    private const val MIN_PART_BYTES = 64L * 1024
+
+    /**
+     * Null when [asrDir] holds something that can be loaded, otherwise why not.
+     *
+     * Loading a malformed .onnx aborts the process from inside onnxruntime, which no Kotlin
+     * `runCatching` can catch, so the check has to happen before the file is handed over.
+     * "The directory is not empty" was the old check, and a directory containing only an
+     * interrupted download satisfied it.
+     */
+    fun asrProblem(context: Context): String? = asrProblem(asrDir(context))
+
+    /** The same check against a plain directory, so it can be tested without a device. */
+    fun asrProblem(dir: File): String? {
+        if (!dir.isDirectory) return "no model directory at ${dir.absolutePath}"
+        val files = dir.listFiles()?.filter { it.isFile }.orEmpty()
+        if (files.isEmpty()) return "no ASR model in ${dir.absolutePath}"
+        files.firstOrNull { it.name.endsWith(".part") }?.let {
+            return "a download is still in progress (${it.name})"
+        }
+        REQUIRED_PARTS.forEach { part ->
+            val match = files.firstOrNull { it.name.startsWith(part) && it.name.endsWith(".onnx") }
+                ?: return "$part model file is missing"
+            if (match.length() < MIN_PART_BYTES) {
+                return "${match.name} is only ${match.length()} bytes, so it is incomplete"
+            }
+        }
+        val tokens = files.firstOrNull { it.name == "tokens.txt" } ?: return "tokens.txt is missing"
+        if (tokens.length() <= 0) return "tokens.txt is empty"
+        return null
+    }
 }
 
 object AsrEngineFactory {
@@ -58,9 +97,23 @@ object AsrEngineFactory {
     /** Version of the bundled sherpa-onnx AAR, or "none". */
     val sherpaVersion: String get() = BuildConfig.SHERPA_VERSION
 
-    /** True once the Parakeet model files are present alongside the runtime. */
-    fun modelsInstalled(context: Context): Boolean =
-        AsrModels.asrDir(context).listFiles()?.isNotEmpty() == true
+    /**
+     * An extra gate the app installs at start-up, so the recorder only ever loads a model the
+     * app's own install records vouch for.
+     *
+     * A seam rather than a dependency: this module knows what a usable directory looks like,
+     * but only the app knows whether the install that produced it actually finished. Returns
+     * null when the directory is good, or the reason it is not.
+     */
+    @Volatile
+    var installVerifier: ((Context) -> String?)? = null
+
+    /** True once the Parakeet model files are complete alongside the runtime. */
+    fun modelsInstalled(context: Context): Boolean = modelProblem(context) == null
+
+    /** Null when a model can be loaded, otherwise why not. */
+    fun modelProblem(context: Context): String? =
+        AsrModels.asrProblem(context) ?: installVerifier?.invoke(context)
 
     /**
      * Picks the best engine actually available on this device: the sherpa-onnx Parakeet
@@ -72,8 +125,11 @@ object AsrEngineFactory {
         if (!BuildConfig.SHERPA_AVAILABLE) {
             return NoopAsrEngine("sherpa-onnx AAR not bundled")
         }
-        if (!modelDir.isDirectory || modelDir.listFiles().isNullOrEmpty()) {
-            return NoopAsrEngine("no ASR model in ${modelDir.absolutePath}")
+        modelProblem(context)?.let { problem ->
+            // Refusing here is the whole point: handing a part-written model to onnxruntime
+            // takes the process down with it, which is not a failure the app can report.
+            Log.w(TAG, "not loading the speech model: $problem")
+            return NoopAsrEngine(problem)
         }
         return runCatching {
             val plugin = Class.forName(SHERPA_PLUGIN)

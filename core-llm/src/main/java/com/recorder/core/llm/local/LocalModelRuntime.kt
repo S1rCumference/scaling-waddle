@@ -78,6 +78,17 @@ object LocalModelRuntime {
     /** llama.cpp commit the bundled AAR was built from, or "none". */
     val commit: String get() = BuildConfig.LLAMA_COMMIT
 
+    /**
+     * An extra gate the app installs at start-up: given a model file, null when the app's own
+     * install records say it is complete, otherwise the reason it is not.
+     *
+     * A seam rather than a dependency, for the same reason the speech engine has one. This
+     * module can see that a file exists; only the app knows how many bytes it was supposed to
+     * be, and a truncated GGUF is a native crash rather than a catchable failure.
+     */
+    @Volatile
+    var fileVerifier: ((File) -> String?)? = null
+
     private val lock = Mutex()
 
     /** Counted so the power report can show whether the model is thrashing in and out. */
