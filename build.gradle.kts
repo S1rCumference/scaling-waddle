@@ -27,7 +27,31 @@ extra["ndkAbi"] = "arm64-v8a"
  * on the phone it read "could not load qwen3-1.7b-q4.gguf: No static method
  * limitedParallelism$default(...)".
  */
-extra["coroutinesVersion"] = "1.10.2"
+extra["coroutinesVersion"] = "1.9.0"
+
+/*
+ * ...and 1.9.0 exactly, not the newest.
+ *
+ * This project compiles with Kotlin 1.9.24, whose compiler reads class metadata up to
+ * version 2.0.0. Coroutines 1.10.x depends on kotlin-stdlib 2.1.0, Gradle upgrades the
+ * whole stdlib to match, and every module then fails to compile with "the actual metadata
+ * version is 2.1.0, but the compiler version 1.9.0 can read versions up to 2.0.0".
+ * Coroutines 1.9.0 is the first release carrying the bridge the llama.cpp AAR needs and
+ * the last one whose stdlib this compiler can still read.
+ *
+ * The stdlib is pinned below rather than left to resolution, so a future dependency that
+ * wants a newer one fails at the pin instead of taking the whole build down. Moving this
+ * project to Kotlin 2.x is what actually lifts the ceiling; that is a separate job.
+ */
+extra["stdlibVersion"] = "2.0.20"
+
+subprojects {
+    configurations.configureEach {
+        resolutionStrategy {
+            force("org.jetbrains.kotlin:kotlin-stdlib:${rootProject.extra["stdlibVersion"]}")
+        }
+    }
+}
 
 tasks.register("clean", Delete::class) {
     delete(rootProject.layout.buildDirectory)
