@@ -33,6 +33,15 @@ data class TranscriptSegment(
      * a day stays the day it was spoken even if the phone later changes timezone.
      */
     @ColumnInfo(name = "day_key", defaultValue = "0") val dayKey: Int = DayKey.of(startTs),
+    /**
+     * How this stretch sounded: loudness in dBFS and zero-crossing rate.
+     *
+     * Two numbers, computed in one pass over samples the recorder already had, kept so
+     * consecutive segments can be compared for a likely change of speaker. No audio is
+     * stored and nobody is identified — see SpeakerChange in core-audio.
+     */
+    @ColumnInfo(name = "level_db", defaultValue = "0") val levelDb: Float = 0f,
+    @ColumnInfo(name = "zcr", defaultValue = "0") val zeroCrossingRate: Float = 0f,
 )
 
 /** Which pass produced a correction. Strings, so new passes need no migration. */

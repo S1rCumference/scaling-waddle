@@ -4,6 +4,7 @@ import android.util.Log
 import com.recorder.core.storage.Diagnostics
 import com.recorder.core.asr.AsrEngine
 import com.recorder.core.audio.SpeechSegment
+import com.recorder.core.audio.VoicePrint
 import com.recorder.core.llm.FolderClassifier
 import com.recorder.core.storage.FolderDao
 import com.recorder.core.storage.SegmentSource
@@ -44,11 +45,17 @@ class TranscriptPipeline(
         lastSegmentAt = System.currentTimeMillis()
         if (text.isBlank()) return false
 
+        // One pass over samples that are already in hand, before they are dropped. Doing it
+        // here rather than later is the whole reason this stays cheap: the audio is gone by
+        // the time anything else could ask.
+        val voice = VoicePrint.of(segment.samples)
         val row = TranscriptSegment(
             startTs = segment.startTs,
             endTs = segment.endTs,
             text = text,
             source = SegmentSource.MIC,
+            levelDb = voice.levelDb,
+            zeroCrossingRate = voice.zeroCrossingRate,
         )
         val id = transcripts.insert(row)
 

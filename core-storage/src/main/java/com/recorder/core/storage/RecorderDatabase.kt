@@ -85,15 +85,18 @@ abstract class RecorderDatabase : RoomDatabase() {
 
         /**
          * 2 → 3 adds the review tables — the discrete items a pass produces and the
-         * corrections the user makes to them — and a column on segment_corrections for the
-         * phrases a pass was not sure about. Existing rows default to "no marks", which is
-         * the truth for them: they were written before anything was marked.
+         * corrections the user makes to them — a column on segment_corrections for the
+         * phrases a pass was not sure about, and two columns on transcript_segments holding
+         * how each stretch sounded. Existing rows default to zero, which reads as "not
+         * measured" and simply means no speaker markers appear for older speech.
          */
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE segment_corrections ADD COLUMN uncertain TEXT NOT NULL DEFAULT ''",
                 )
+                db.execSQL("ALTER TABLE transcript_segments ADD COLUMN level_db REAL NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE transcript_segments ADD COLUMN zcr REAL NOT NULL DEFAULT 0")
                 db.execSQL(
                     "CREATE TABLE IF NOT EXISTS summary_items (" +
                         "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +

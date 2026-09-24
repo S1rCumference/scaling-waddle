@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
@@ -35,7 +36,10 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.recorder.core.storage.CorrectionPass
+import com.recorder.core.audio.SpeakerChange
+import com.recorder.core.audio.VoicePrint
 import com.recorder.core.storage.DayKey
+import com.recorder.core.storage.TranscriptSegment
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -198,7 +202,7 @@ private fun SearchField(query: String, onChange: (String) -> Unit, onClose: () -
 /** One found line: when it was said, and enough of it to recognise. Tapping opens its group. */
 @Composable
 private fun SearchResult(
-    segment: com.recorder.core.storage.TranscriptSegment,
+    segment: TranscriptSegment,
     onClick: () -> Unit,
 ) {
     val compact = LocalCompact.current
@@ -219,6 +223,37 @@ private fun SearchResult(
                 Text(segment.text, style = MaterialTheme.typography.bodyMedium, maxLines = 3)
             }
         }
+    }
+}
+
+/**
+ * Whether two consecutive lines probably came from different people.
+ *
+ * Pure and one call deep on purpose: replacing this with real diarization is replacing this
+ * function. Segments recorded before the app measured anything have a zero voice print and
+ * never produce a marker, which is the right answer for them.
+ */
+private fun speakerChanged(previous: TranscriptSegment, current: TranscriptSegment): Boolean =
+    SpeakerChange.between(
+        previous = VoicePrint(previous.levelDb, previous.zeroCrossingRate),
+        current = VoicePrint(current.levelDb, current.zeroCrossingRate),
+        gapMs = current.startTs - previous.endTs,
+    )
+
+@Composable
+private fun SpeakerChangeMarker() {
+    val compact = LocalCompact.current
+    Row(
+        Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HorizontalDivider(Modifier.weight(1f))
+        Text(
+            "  someone else  ",
+            color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.outline,
+            fontSize = 11.sp,
+        )
+        HorizontalDivider(Modifier.weight(1f))
     }
 }
 
@@ -365,8 +400,12 @@ private fun Lines(viewModel: RecorderViewModel, modifier: Modifier) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val sideBySide = mode == TextMode.BOTH && maxWidth >= 560.dp
             LazyColumn(Modifier.fillMaxSize(), state = state) {
-                items(lines, key = { it.segment.id }) { line ->
+                itemsIndexed(lines, key = { _, it -> it.segment.id }) { index, line ->
                     val selected = line.segment.id in selection
+                    // A generic divider, never a name: nothing here knows who anybody is.
+                    if (index > 0 && speakerChanged(lines[index - 1].segment, line.segment)) {
+                        SpeakerChangeMarker()
+                    }
                     Column(
                         Modifier.fillMaxWidth()
                             .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else Color.Transparent)
