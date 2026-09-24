@@ -46,17 +46,21 @@ object StartupGuard {
      * something calls [markHealthy], and decides whether to come up in safe mode.
      */
     fun begin(context: Context) {
-        val marks = runCatching { file(context).readText().trim().toInt() }.getOrDefault(0)
-        unhealthyStarts = marks + 1
-        safeMode = unhealthyStarts > SAFE_MODE_AFTER
-        runCatching { file(context).writeText(unhealthyStarts.toString()) }
-
         installCrashLogger()
+        begin(file(context))
+    }
+
+    /** The counting, against a plain file, so the safety net itself can be tested. */
+    internal fun begin(marks: File) {
+        val before = runCatching { marks.readText().trim().toInt() }.getOrDefault(0)
+        unhealthyStarts = before + 1
+        safeMode = unhealthyStarts > SAFE_MODE_AFTER
+        runCatching { marks.writeText(unhealthyStarts.toString()) }
 
         when {
             safeMode -> Diagnostics.e(
                 TAG,
-                "safe mode: $marks previous start(s) did not survive. Nothing will start " +
+                "safe mode: $before previous start(s) did not survive. Nothing will start " +
                     "automatically and no model will be loaded. Settings -> Models has the repair.",
             )
 
@@ -72,17 +76,19 @@ object StartupGuard {
      * seconds covers a normal launch, and the recorder running for a minute covers a start
      * from boot that nobody is looking at.
      */
-    fun markHealthy(context: Context) {
+    fun markHealthy(context: Context) = markHealthy(file(context))
+
+    internal fun markHealthy(marks: File) {
         if (unhealthyStarts == 0) return
         unhealthyStarts = 0
-        runCatching { file(context).writeText("0") }
+        runCatching { marks.writeText("0") }
         Diagnostics.i(TAG, "start-up looks healthy")
     }
 
     /** Leaves safe mode for this launch onwards, at the user's request. */
     fun clearSafeMode(context: Context) {
         safeMode = false
-        markHealthy(context)
+        markHealthy(file(context))
         Diagnostics.i(TAG, "safe mode cleared by hand")
     }
 
