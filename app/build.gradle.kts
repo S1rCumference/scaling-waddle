@@ -117,6 +117,19 @@ android {
             )
         }
     }
+
+    lint {
+        // Lint Vital is on by default for release builds and needs a "local lint" AAR from
+        // every dependency for cross-module analysis. AGP refuses to build one for core-asr
+        // or core-llm, which each depend directly on a local .aar file (sherpa-onnx,
+        // llama.cpp) rather than a Maven artifact, since neither ships to a repository:
+        // ":core-asr:bundleReleaseLocalLintAar ... Direct local .aar file dependencies are
+        // not supported when building an AAR." That failed a release build before it
+        // compiled anything release-specific, over a lint pass this project doesn't
+        // otherwise run. Debug builds were never affected because Lint Vital only runs on
+        // release.
+        checkReleaseBuilds = false
+    }
 }
 
 dependencies {
