@@ -5,11 +5,17 @@ plugins {
 }
 
 /**
- * Release signing comes from the environment so the key never lives in the repo.
- * CI decodes KEYSTORE_BASE64 to a file and exports these; locally they are simply absent
- * and the release build stays unsigned rather than failing.
+ * Release signing uses a keystore committed to this repository, with a known password.
+ *
+ * That is a deliberate choice for a personal build: it means any checkout — or any CI run —
+ * produces an APK that installs over the top of the previous one, with nothing to configure.
+ * The tradeoff is that the key is not private, so anyone can build an APK Android will accept
+ * as an update to this app. Fine for phones you own; replace it with a real private key before
+ * handing this to anyone else. See README, "Signing".
  */
-val keystorePath: String? = System.getenv("KEYSTORE_PATH")?.takeIf { File(it).isFile }
+val keystoreFile: File = rootProject.file("signing/recorder.keystore")
+val keystorePassword = "recorder123"
+val keystoreAlias = "recorder"
 
 android {
     namespace = "com.recorder.app"
@@ -33,12 +39,12 @@ android {
     }
 
     signingConfigs {
-        if (keystorePath != null) {
+        if (keystoreFile.isFile) {
             create("release") {
-                storeFile = File(keystorePath)
-                storePassword = System.getenv("KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("KEY_ALIAS")
-                keyPassword = System.getenv("KEY_PASSWORD")
+                storeFile = keystoreFile
+                storePassword = keystorePassword
+                keyAlias = keystoreAlias
+                keyPassword = keystorePassword
             }
         }
     }
@@ -64,7 +70,7 @@ android {
             // build that silently loses them would look exactly like a missing model.
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            if (keystorePath != null) {
+            if (keystoreFile.isFile) {
                 signingConfig = signingConfigs.getByName("release")
             }
         }

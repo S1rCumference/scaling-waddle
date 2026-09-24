@@ -48,7 +48,6 @@ device-owner QR path on a factory-reset phone, also on the install page. It is o
 
 | Thing | Why it is not automatic |
 |---|---|
-| Add four signing secrets | `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. Commands are in [Release signing](#release-signing). Until these exist, tagging a release fails and there is nothing for the install page to link to. |
 | Enable GitHub Pages | Settings → Pages → Source: **GitHub Actions**. Until then the install page is not published. |
 | Run the benchmark and battery test | They need the phone. The tables below are empty for that reason. |
 
@@ -167,32 +166,11 @@ opening on noise; raise the VAD threshold in Settings.
 | Models, transcripts, keys | Uninstall the app. Everything lives in app-private storage and goes with it. |
 | Recording, temporarily | The toggle in the app's top bar. The watchdog respects a deliberate stop. |
 
-## Release signing
+## Signing
 
-Every build must be signed with the same key or updates cannot install over the top.
-
-```bash
-keytool -genkeypair -v \
-  -keystore release.keystore \
-  -alias recorder \
-  -keyalg RSA -keysize 4096 -validity 10000 \
-  -storetype PKCS12 \
-  -dname "CN=Local Recorder, O=Personal, C=US"
-
-base64 -w0 release.keystore     # macOS: base64 -i release.keystore | tr -d '\n'
-```
-
-Add these under **Settings → Secrets and variables → Actions**:
-
-| Secret | Value |
-|---|---|
-| `KEYSTORE_BASE64` | the single-line base64 above |
-| `KEYSTORE_PASSWORD` | the keystore passphrase |
-| `KEY_ALIAS` | `recorder` |
-| `KEY_PASSWORD` | the key passphrase |
-
-Back up `release.keystore` off the machine — it is the only thing that lets a future build
-update an installed app. Then:
+Every build has to be signed with the same key or updates cannot install over the top of an
+earlier one. The key is in this repository: `signing/recorder.keystore`, alias `recorder`,
+password `recorder123`. Nothing to configure, no GitHub secrets — tagging is all it takes:
 
 ```bash
 git tag v0.2.0 && git push origin v0.2.0
@@ -200,6 +178,12 @@ git tag v0.2.0 && git push origin v0.2.0
 
 That builds both flavours signed, verifies the signatures, writes `SHA256SUMS`, publishes a
 GitHub Release, and republishes the install page with that build's digests and QR code.
+
+**This key is deliberately not private.** Anyone with the repository can produce an APK that
+Android will accept as an update to this app. That is a fine trade for phones you own, and it
+is why any checkout builds an installable update with zero setup. Replace it with a real
+private key, kept out of the repository, before ever distributing this app to anyone outside
+your own devices.
 
 ## Developing
 

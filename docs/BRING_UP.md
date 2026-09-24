@@ -10,7 +10,6 @@ than a surprise. Where something needs reporting back, it says so.
 
 ## 0. Before the phone
 
-- [ ] Add the four signing secrets (README → Release signing).
 - [ ] Enable Pages: **Settings → Pages → Source: GitHub Actions**.
 - [ ] Tag a release: `git tag v0.2.0 && git push origin v0.2.0`.
 - [ ] Confirm the run published: Actions → the tag's run → `release` and `pages` both green.
