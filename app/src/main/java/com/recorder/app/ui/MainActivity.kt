@@ -31,7 +31,7 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { granted ->
-        if (granted[Manifest.permission.RECORD_AUDIO] == true) startUnlessConflict()
+        if (granted[Manifest.permission.RECORD_AUDIO] == true) startRecording()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
