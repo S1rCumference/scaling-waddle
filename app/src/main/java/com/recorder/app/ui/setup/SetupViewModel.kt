@@ -100,16 +100,29 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggle(id: String) {
+        var nowSelected = false
         _plan.update { list ->
             list.map { plan ->
                 // Required models are not optional; the app produces no text without them.
                 if (plan.entry.id == id && !plan.entry.required) {
-                    plan.copy(selected = !plan.selected)
+                    nowSelected = !plan.selected
+                    plan.copy(selected = nowSelected)
                 } else {
                     plan
                 }
             }
         }
+        // Ticking a box while the queue is already running adds to it there and then, so
+        // "select them all and it downloads them" means exactly that.
+        if (nowSelected && ModelInstallStore.running.value) {
+            ModelDownloadService.start(getApplication(), listOf(id))
+        }
+    }
+
+    /** Ticks everything in the catalogue and starts downloading it. */
+    fun selectAllAndDownload() {
+        _plan.update { list -> list.map { it.copy(selected = true) } }
+        startInstall()
     }
 
     /** Total download size of everything selected and not yet installed. */
@@ -132,6 +145,7 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
             _message.value = "Everything selected is already installed."
             return
         }
+        // Already running: the service queues the extras rather than starting a second pass.
         installer.spaceProblem(queue.map { it.entry })?.let { problem ->
             _message.value = problem
             return

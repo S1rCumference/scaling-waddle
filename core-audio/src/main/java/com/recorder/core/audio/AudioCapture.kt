@@ -103,7 +103,10 @@ class AudioCapture(
     private fun watchSilencing(record: AudioRecord, executor: Executor): AudioManager.AudioRecordingCallback? {
         val listener = onSilencedChanged ?: return null
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
-        var last: Boolean? = null
+        // Seeded to false, not null: the first configuration callback almost always says
+        // "not silenced", and reporting that as a change logged "microphone silencing
+        // cleared" on every single start, for a silencing that never happened.
+        var last: Boolean? = false
         fun report(silenced: Boolean) {
             if (silenced != last) {
                 last = silenced

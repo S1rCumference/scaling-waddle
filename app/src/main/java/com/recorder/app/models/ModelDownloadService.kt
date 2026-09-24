@@ -13,6 +13,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.recorder.app.R
 import com.recorder.app.ServiceLocator
+import com.recorder.app.service.RecordingService
 import com.recorder.app.ui.MainActivity
 import com.recorder.core.storage.Diagnostics
 import kotlinx.coroutines.CoroutineScope
@@ -125,6 +126,11 @@ class ModelDownloadService : Service() {
             ModelInstallStore.setActive(null)
         }
         Diagnostics.i(TAG, "download queue finished, $done installed")
+        if (done > 0) {
+            // Put them to work now rather than the next time recording is started by hand.
+            // Nothing restarts: the running recorder swaps the model in behind the mic.
+            RecordingService.notifyModelsChanged(this)
+        }
     }
 
     override fun onDestroy() {

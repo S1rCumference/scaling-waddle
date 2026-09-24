@@ -226,7 +226,9 @@ private fun ModelsStep(viewModel: SetupViewModel) {
                     Checkbox(
                         checked = state.selected || state.installed,
                         onCheckedChange = { viewModel.toggle(state.entry.id) },
-                        enabled = !state.entry.required && !state.installed && !installing,
+                        // Deliberately still live while a download runs: ticking one more
+                        // model adds it to the queue instead of making you wait and come back.
+                        enabled = !state.entry.required && !state.installed,
                     )
                     Column(Modifier.weight(1f)) {
                         Text(state.entry.displayName, style = MaterialTheme.typography.titleSmall)
@@ -267,8 +269,8 @@ private fun ModelsStep(viewModel: SetupViewModel) {
     }
 
     Row {
-        Button(onClick = viewModel::startInstall, enabled = !installing && pending > 0) {
-            Text(if (installing) "Downloading…" else "Download")
+        Button(onClick = viewModel::selectAllAndDownload, enabled = pending > 0) {
+            Text(if (installing) "Add the rest" else "Download all")
         }
         if (installing) {
             TextButton(onClick = viewModel::cancelInstall) { Text("Stop") }
@@ -279,8 +281,14 @@ private fun ModelsStep(viewModel: SetupViewModel) {
     }
     if (installing) {
         Body(
-            "This keeps going with the screen off and the app closed — there is a notification " +
-                "with the progress.",
+            "Carry on with setup — this keeps going in the background, with the screen off " +
+                "and the app closed, and there is a notification with the progress. Each " +
+                "model starts being used the moment it lands; nothing needs restarting.",
+        )
+    } else if (pending > 0) {
+        Body(
+            "\"Download all\" takes everything above. You can press Next straight after: " +
+                "downloading continues behind the rest of setup.",
         )
     }
 }

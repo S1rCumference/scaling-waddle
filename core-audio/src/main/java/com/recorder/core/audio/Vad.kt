@@ -24,6 +24,12 @@ interface VoiceActivityDetector : Closeable {
  * Silero VAD through ONNX Runtime. The model file is not shipped in the APK — see
  * `scripts/fetch_models.sh`. Use [tryLoad] so a missing or unreadable model degrades to
  * [EnergyVad] instead of taking the recording pipeline down with it.
+ *
+ * [speechProbability] lets inference failures propagate on purpose. It used to catch
+ * everything and return 0, which is indistinguishable from a silent room: a model that
+ * loaded but could not run made the whole app look like a dead microphone, with only a
+ * logcat line to say otherwise and no way to read logcat on the phone. Wrap this in
+ * [ResilientVad], which counts failures and switches to the energy detector for good.
  */
 class SileroVad private constructor(
     private val env: OrtEnvironment,
@@ -72,9 +78,6 @@ class SileroVad private constructor(
                 }
                 probability
             }
-        } catch (t: Throwable) {
-            Log.w(TAG, "Silero inference failed, treating frame as silence", t)
-            0f
         } finally {
             inputs.values.forEach { runCatching { it.close() } }
         }
@@ -147,11 +150,7 @@ class EnergyVad(
     private var noiseFloorDb = -55f
 
     override fun speechProbability(frame: FloatArray, sampleRate: Int): Float {
-        var sum = 0.0
-        for (s in frame) sum += (s * s).toDouble()
-        val rms = sqrt(sum / frame.size).toFloat()
-        val db = 20f * kotlin.math.log10(rms.coerceAtLeast(1e-7f))
-
+        val db = rmsDb(frame)
         val isSpeech = db > noiseFloorDb + marginDb
         // Track the floor only on quiet frames so a long sentence can't drag it upward.
         if (!isSpeech) noiseFloorDb += (db - noiseFloorDb) * FLOOR_ADAPT
@@ -165,4 +164,13 @@ class EnergyVad(
     private companion object {
         const val FLOOR_ADAPT = 0.05f
     }
+}
+
+/** Frame loudness in dBFS. Shared so the energy detector and its auditor agree. */
+internal fun rmsDb(frame: FloatArray): Float {
+    if (frame.isEmpty()) return -120f
+    var sum = 0.0
+    for (s in frame) sum += (s * s).toDouble()
+    val rms = sqrt(sum / frame.size).toFloat()
+    return 20f * kotlin.math.log10(rms.coerceAtLeast(1e-7f))
 }

@@ -18,11 +18,11 @@ import com.recorder.app.ServiceLocator
 import com.recorder.app.correction.CorrectionLoop
 import com.recorder.app.cover.CoverPresenter
 import com.recorder.app.ui.MainActivity
-import com.recorder.core.asr.AsrEngine
 import com.recorder.core.asr.AsrEngineFactory
 import com.recorder.core.asr.AsrModels
+import com.recorder.core.asr.NoopAsrEngine
 import com.recorder.core.audio.AudioCapture
-import com.recorder.core.audio.EnergyVad
+import com.recorder.core.audio.ResilientVad
 import com.recorder.core.audio.SileroVad
 import com.recorder.core.audio.SpeechSegmenter
 import com.recorder.core.audio.VoiceActivityDetector
@@ -36,7 +36,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -51,7 +53,15 @@ class RecordingService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var vad: VoiceActivityDetector? = null
-    private var asr: AsrEngine? = null
+
+    /**
+     * Held behind a swappable handle so a model that finishes downloading can be put to work
+     * without stopping the microphone. Restarting the service to pick up a new model would
+     * mean a gap in the recording, and a gap is the one thing this app must not have.
+     */
+    private var asr: SwappableAsrEngine? = null
+
+    private val stats = PipelineStats()
 
     /**
      * Present only so something is alive all day to watch for the phone being closed. The
@@ -90,7 +100,47 @@ class RecordingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Reaching here at all means the start was permitted, so clear any resume prompt.
         ResumeNotifier.clear(this)
+        if (intent?.action == ACTION_MODELS_CHANGED) adoptNewModels()
         return START_STICKY
+    }
+
+    /**
+     * Picks up models that were not installed when the pipeline started.
+     *
+     * The microphone keeps running throughout: only the detector's delegate and the ASR
+     * engine behind the swappable handle are replaced. Before this, a model downloaded while
+     * recording did nothing until the user noticed and toggled recording off and on.
+     */
+    private fun adoptNewModels() = scope.launch {
+        val engine = asr ?: return@launch
+        var changed = false
+
+        if (engine.isNoop() && AsrEngineFactory.modelsInstalled(this@RecordingService)) {
+            val threads = ServiceLocator.settings.asrThreads.first()
+            val next = AsrEngineFactory.create(this@RecordingService, threads)
+            if (next !is NoopAsrEngine) {
+                engine.swap(next)
+                changed = true
+                Diagnostics.i(TAG, "speech model picked up without stopping: ${next.name}")
+            }
+        }
+
+        (vad as? ResilientVad)?.let { detector ->
+            if (detector.usingFallback) {
+                SileroVad.tryLoad(AsrModels.sileroVadFile(this@RecordingService))?.let { silero ->
+                    if (detector.adopt(silero)) {
+                        changed = true
+                        Diagnostics.i(TAG, "speech detector picked up without stopping: Silero")
+                    } else {
+                        silero.close()
+                    }
+                }
+            }
+        }
+
+        if (changed) {
+            updateNotification(getString(R.string.notification_recording, vadName(), engine.name))
+        }
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -119,9 +169,16 @@ class RecordingService : Service() {
             val threads = settings.asrThreads.first()
             val threshold = settings.vadThreshold.first()
 
-            val detector = SileroVad.tryLoad(AsrModels.sileroVadFile(this@RecordingService))
-                ?: EnergyVad().also { Diagnostics.w(TAG, "Silero VAD not available; using the energy fallback") }
-            val engine = AsrEngineFactory.create(this@RecordingService, threads)
+            val silero = SileroVad.tryLoad(AsrModels.sileroVadFile(this@RecordingService))
+            if (silero == null) {
+                Diagnostics.w(TAG, "Silero VAD not installed; using the energy fallback")
+            }
+            val detector = ResilientVad(
+                primary = silero,
+                threshold = threshold,
+                onFallback = { reason -> Diagnostics.w(TAG, reason) },
+            )
+            val engine = SwappableAsrEngine(AsrEngineFactory.create(this@RecordingService, threads))
             if (!AsrEngineFactory.sherpaBundled) {
                 Diagnostics.w(TAG, "sherpa-onnx not bundled in this build; recording produces no text")
             } else if (!AsrEngineFactory.modelsInstalled(this@RecordingService)) {
@@ -131,6 +188,7 @@ class RecordingService : Service() {
             }
             vad = detector
             asr = engine
+            heartbeat()
 
             val pipeline = TranscriptPipeline(
                 asr = engine,
@@ -145,13 +203,7 @@ class RecordingService : Service() {
             _state.value = RecorderState.RECORDING
             _recordingSince.value = System.currentTimeMillis()
             PowerMetrics.onRecordingStarted()
-            updateNotification(
-                getString(
-                    R.string.notification_recording,
-                    if (detector is SileroVad) "Silero" else "energy",
-                    engine.name,
-                ),
-            )
+            updateNotification(getString(R.string.notification_recording, detector.activeName, engine.name))
 
             AudioCapture(onSilencedChanged = { silenced ->
                 _micSilenced.value = silenced
@@ -161,15 +213,32 @@ class RecordingService : Service() {
                     Diagnostics.i(TAG, "microphone silencing cleared")
                 }
             }).frames()
-                .segmentSpeech(detector, SpeechSegmenter(threshold = threshold))
+                .segmentSpeech(
+                    ObservedVad(detector, threshold, stats),
+                    SpeechSegmenter(threshold = threshold),
+                )
                 .catch { error ->
                     Diagnostics.e(TAG, "capture pipeline failed", error)
                     _state.value = RecorderState.ERROR
                     updateNotification(getString(R.string.notification_error))
                 }
-                .collect { segment -> pipeline.process(segment) }
+                .collect { segment -> stats.onSegment(pipeline.process(segment)) }
         }
     }
+
+    /**
+     * One line a minute about what the pipeline is doing. The whole point is that a phone
+     * with no computer attached can answer "is it hearing me?" from Settings → Diagnostics
+     * instead of from logcat, which is unreachable on this device.
+     */
+    private fun heartbeat() = scope.launch {
+        while (isActive) {
+            delay(HEARTBEAT_MS)
+            runCatching { stats.heartbeat(TAG) }
+        }
+    }
+
+    private fun vadName(): String = (vad as? ResilientVad)?.activeName ?: "energy"
 
     private fun startForegroundNotification(text: String) {
         val notification = buildNotification(text)
@@ -213,6 +282,7 @@ class RecordingService : Service() {
     companion object {
         private const val TAG = "RecordingService"
         const val CHANNEL_ID = "recording"
+        private const val HEARTBEAT_MS = 60_000L
         private const val NOTIFICATION_ID = 1
 
         private val _state = MutableStateFlow(RecorderState.STOPPED)
@@ -234,6 +304,24 @@ class RecordingService : Service() {
         val micSilenced: StateFlow<Boolean> = _micSilenced.asStateFlow()
 
         const val ACTION_RESUME = "com.recorder.app.action.RESUME"
+
+        /** Tells a running recorder that a model has arrived since it started. */
+        const val ACTION_MODELS_CHANGED = "com.recorder.app.action.MODELS_CHANGED"
+
+        /**
+         * Asks a *already running* recorder to pick up newly installed models. Deliberately
+         * not a start: starting a microphone service from the background is refused on
+         * Android 14+, so if recording is not running this does nothing and the models are
+         * loaded the next time the user starts it.
+         */
+        fun notifyModelsChanged(context: Context) {
+            if (_state.value != RecorderState.RECORDING) return
+            runCatching {
+                context.startService(
+                    Intent(context, RecordingService::class.java).setAction(ACTION_MODELS_CHANGED),
+                )
+            }.onFailure { Diagnostics.w(TAG, "could not hand the new models to the recorder", it) }
+        }
 
         /**
          * Starts recording, reporting refusal instead of crashing.

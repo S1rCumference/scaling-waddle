@@ -29,19 +29,20 @@ class TranscriptPipeline(
     private val keywordWatcher: KeywordWatcher,
 ) {
 
-    suspend fun process(segment: SpeechSegment) {
+    /** Returns true when the segment produced text that was stored. */
+    suspend fun process(segment: SpeechSegment): Boolean {
         val startedAt = System.nanoTime()
         val text = runCatching { asr.transcribe(segment.samples, segment.sampleRate) }
             .getOrElse { error ->
                 Diagnostics.w(TAG, "transcription failed", error)
-                return
+                return false
             }
         PowerMetrics.recordTranscription(
             audioMs = segment.durationMs,
             cpuNanos = System.nanoTime() - startedAt,
         )
         lastSegmentAt = System.currentTimeMillis()
-        if (text.isBlank()) return
+        if (text.isBlank()) return false
 
         val row = TranscriptSegment(
             startTs = segment.startTs,
@@ -58,6 +59,7 @@ class TranscriptPipeline(
             runCatching { transcripts.assignFolder(id, folders.ensure(name)) }
                 .onFailure { Log.d(TAG, "folder assignment skipped: ${it.message}") }
         }
+        return true
     }
 
     companion object {
