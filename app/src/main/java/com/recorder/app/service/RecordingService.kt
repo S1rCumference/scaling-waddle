@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -62,6 +63,9 @@ class RecordingService : Service() {
     private var asr: SwappableAsrEngine? = null
 
     private val stats = PipelineStats()
+
+    /** Whether the last frame was dropped, so the detector is reset once per transition. */
+    private var wasPaused = false
 
     /**
      * Present only so something is alive all day to watch for the phone being closed. The
@@ -213,6 +217,26 @@ class RecordingService : Service() {
                     Diagnostics.i(TAG, "microphone silencing cleared")
                 }
             }).frames()
+                // Pausing drops frames; it does not close the microphone. Reopening the mic
+                // is how audio gets lost, and a paused recorder that has to be restarted by
+                // hand cannot resume itself on Android 14+, where a microphone service
+                // started from the background is refused outright.
+                .transform { frame ->
+                    if (pauseElapsed()) resumeNow()
+                    if (_pausedUntil.value > 0L) {
+                        if (!wasPaused) {
+                            wasPaused = true
+                            detector.reset()
+                            Diagnostics.i(TAG, "recording paused until ${clock(_pausedUntil.value)}")
+                        }
+                        return@transform
+                    }
+                    if (wasPaused) {
+                        wasPaused = false
+                        detector.reset()
+                    }
+                    emit(frame)
+                }
                 .segmentSpeech(
                     ObservedVad(detector, threshold, stats),
                     SpeechSegmenter(threshold = threshold),
@@ -237,6 +261,15 @@ class RecordingService : Service() {
             runCatching { stats.heartbeat(TAG) }
         }
     }
+
+    /** True when a pause has run out and recording should pick up again by itself. */
+    private fun pauseElapsed(): Boolean {
+        val until = _pausedUntil.value
+        return until > 0L && System.currentTimeMillis() >= until
+    }
+
+    private fun clock(ts: Long): String =
+        java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ts))
 
     private fun vadName(): String = (vad as? ResilientVad)?.activeName ?: "energy"
 
@@ -293,6 +326,29 @@ class RecordingService : Service() {
 
         /** Observable so the UI can show whether recording is actually running. */
         val state: StateFlow<RecorderState> = _state.asStateFlow()
+
+        private val _pausedUntil = MutableStateFlow(0L)
+
+        /**
+         * When the current pause ends, or 0 when not paused.
+         *
+         * Deliberately not persisted. If the process dies while paused the pause is
+         * forgotten and recording resumes, which is the safe direction to fail in: a
+         * recorder that silently stays off is the one failure this app cannot recover from.
+         */
+        val pausedUntil: StateFlow<Long> = _pausedUntil.asStateFlow()
+
+        /** Stops writing text for [minutes], keeping the microphone and service alive. */
+        fun pauseFor(minutes: Int) {
+            _pausedUntil.value = System.currentTimeMillis() + minutes * 60_000L
+        }
+
+        fun resumeNow() {
+            if (_pausedUntil.value != 0L) {
+                _pausedUntil.value = 0L
+                Diagnostics.i(TAG, "recording resumed")
+            }
+        }
 
         private val _micSilenced = MutableStateFlow(false)
 
@@ -353,6 +409,7 @@ class RecordingService : Service() {
 
         fun stop(context: Context) {
             Diagnostics.i(TAG, "recording stopped")
+            _pausedUntil.value = 0L
             context.stopService(Intent(context, RecordingService::class.java))
         }
     }

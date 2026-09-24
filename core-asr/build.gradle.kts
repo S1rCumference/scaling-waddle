@@ -46,7 +46,7 @@ android {
 dependencies {
     implementation(project(":core-audio"))
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:${rootProject.extra["coroutinesVersion"]}")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.18.0")
     if (sherpaPresent) implementation(sherpaAar)
 

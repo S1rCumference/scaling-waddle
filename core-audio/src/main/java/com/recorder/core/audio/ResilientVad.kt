@@ -43,7 +43,9 @@ class ResilientVad(
     private var droppedForFailure = false
 
     private var consecutiveFailures = 0
-    private var loudFrames = 0L
+    private var loudRun = 0L
+    private var longestLoudRun = 0L
+    private var auditedFrames = 0L
     private var bestProbability = 0f
     private var primaryProven = false
 
@@ -89,12 +91,25 @@ class ResilientVad(
 
         // The fallback is consulted on every audited frame, which also keeps its noise floor
         // warm, so a switch does not begin with a detector that has never heard the room.
-        if (fallback.speechProbability(frame, sampleRate) >= threshold) loudFrames++
+        if (fallback.speechProbability(frame, sampleRate) >= threshold) {
+            loudRun++
+            if (loudRun > longestLoudRun) longestLoudRun = loudRun
+        } else {
+            loudRun = 0
+        }
 
-        if (loudFrames >= LOUD_FRAMES_BEFORE_SWITCH && bestProbability < NEVER_CLOSE) {
-            val seconds = loudFrames * frame.size / sampleRate.coerceAtLeast(1)
+        auditedFrames++
+        if (auditedFrames > AUDIT_FRAMES) {
+            // Long enough. A detector that has run this long without tripping the test is
+            // working; stop paying for a second detector on every frame.
+            primaryProven = true
+            return probability
+        }
+
+        if (longestLoudRun >= LOUD_RUN_BEFORE_SWITCH && bestProbability < NEVER_CLOSE) {
+            val seconds = longestLoudRun * frame.size / sampleRate.coerceAtLeast(1)
             switchTo(
-                "about ${seconds}s of clear sound went by without it ever reporting speech " +
+                "${seconds}s of unbroken sound went by without it ever reporting speech " +
                     "(its highest score was ${"%.3f".format(bestProbability)}, it needs $threshold)",
             )
         }
@@ -119,7 +134,9 @@ class ResilientVad(
      */
     fun adopt(next: VoiceActivityDetector): Boolean {
         if (droppedForFailure || primaryVad != null) return false
-        loudFrames = 0
+        loudRun = 0
+        longestLoudRun = 0
+        auditedFrames = 0
         bestProbability = 0f
         primaryProven = false
         consecutiveFailures = 0
@@ -142,8 +159,21 @@ class ResilientVad(
         /** Four in a row is a broken model; one is a hiccup worth riding out. */
         const val MAX_FAILURES = 4
 
-        /** ~150 frames of 32 ms = about five seconds of sound above the noise floor. */
-        const val LOUD_FRAMES_BEFORE_SWITCH = 150L
+        /**
+         * How much *unbroken* sound above the room's floor it takes to call the primary
+         * detector broken: 312 frames of 32 ms, about ten seconds.
+         *
+         * This counts a continuous run, not a total, and that distinction is the whole
+         * point. The first version counted every loud frame in the session, and on a desk
+         * with a mechanical keyboard it demoted a perfectly good Silero after four seconds:
+         * typing is loud, so the energy detector flagged it, and Silero scored it 0.002
+         * because it is not speech — which is the correct answer. Scattered clicks reset
+         * the run; a person talking for ten seconds does not.
+         */
+        const val LOUD_RUN_BEFORE_SWITCH = 312L
+
+        /** ~10 minutes of 32 ms frames. After this the primary has earned its place. */
+        const val AUDIT_FRAMES = 18_750L
 
         /** Below this the model is not "unsure", it is not working. */
         const val NEVER_CLOSE = 0.10f

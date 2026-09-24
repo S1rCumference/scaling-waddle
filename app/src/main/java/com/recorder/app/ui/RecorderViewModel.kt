@@ -454,6 +454,20 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         if (enabled) RecordingService.start(context) else RecordingService.stop(context)
     }
 
+    /** When the current pause ends, or 0. Shown on both the inner and the cover screen. */
+    val pausedUntil: StateFlow<Long> = RecordingService.pausedUntil
+
+    /**
+     * Stops writing text for [minutes] without closing the microphone or the service.
+     *
+     * Not the same as switching recording off. A stopped recorder cannot start itself again
+     * on Android 14+ — a microphone service launched from the background is refused — so a
+     * timed pause that actually comes back has to keep the service alive.
+     */
+    fun pauseFor(minutes: Int) = RecordingService.pauseFor(minutes)
+
+    fun resumeNow() = RecordingService.resumeNow()
+
     fun dismissFlag(id: Long) = viewModelScope.launch { db.flagged().dismiss(id) }
 
     fun saveTriggers(keywords: Set<String>) = viewModelScope.launch {

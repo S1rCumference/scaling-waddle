@@ -52,6 +52,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.recorder.app.BuildConfig
 import com.recorder.app.service.RecordingService
 import kotlinx.coroutines.delay
 
@@ -235,7 +236,9 @@ private fun ExpandedShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
                 TopAppBar(
                     title = {
                         Column {
-                            Text("Recorder 2.1")
+                            // The real version, not a number written by hand. The title said
+                            // "2.1" while the build was 0.2.1 and then 2.2.0.
+                            Text("Recorder ${BuildConfig.VERSION_NAME}")
                             progress?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
                         }
                     },

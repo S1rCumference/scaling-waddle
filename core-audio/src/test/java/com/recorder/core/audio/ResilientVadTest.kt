@@ -4,6 +4,7 @@ import kotlin.math.PI
 import kotlin.math.sin
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -65,12 +66,32 @@ class ResilientVadTest {
         val deaf = Stub(probability = 0.01f)
         val vad = ResilientVad(primary = deaf, onFallback = { reason = it })
 
-        // Let the energy detector settle on a quiet floor first, then talk over it.
+        // Let the energy detector settle on a quiet floor first, then talk over it without
+        // a break — an unbroken run is what the test requires.
         repeat(50) { vad.speechProbability(silence(), sampleRate) }
         repeat(400) { vad.speechProbability(tone(), sampleRate) }
 
         assertTrue(vad.usingFallback)
         assertTrue(reason!!.contains("reporting speech"))
+    }
+
+    @Test
+    fun `intermittent noise does not demote a detector that says it is not speech`() {
+        // The case from a real phone: a mechanical keyboard on the same desk. Every click
+        // is loud enough for the energy detector, and Silero scores it near zero because
+        // it is not speech — which is correct, and used to get Silero demoted in seconds.
+        var reason: String? = null
+        val vad = ResilientVad(primary = Stub(probability = 0.002f), onFallback = { reason = it })
+
+        repeat(50) { vad.speechProbability(silence(), sampleRate) }
+        repeat(400) {
+            // A click, then a gap. Never a sustained run.
+            repeat(3) { vad.speechProbability(tone(), sampleRate) }
+            repeat(10) { vad.speechProbability(silence(), sampleRate) }
+        }
+
+        assertNull(reason)
+        assertFalse(vad.usingFallback)
     }
 
     @Test

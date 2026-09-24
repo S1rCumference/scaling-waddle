@@ -3,6 +3,7 @@ package com.recorder.app.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -12,16 +13,19 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.recorder.app.service.RecordingService
 import com.recorder.core.storage.HourSummary
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -33,12 +37,55 @@ private val SHORT_CLOCK = SimpleDateFormat("HH:mm", Locale.getDefault())
  * Live: the transcript as it lands, and today's logs grouped by hour below it. On the cover
  * screen the hourly list is one tap away rather than squeezed underneath.
  */
+/**
+ * One line: stop now, or pause for an hour and have it come back on its own.
+ *
+ * Lives at the top of the live view, which is what both screens show, so the same control
+ * is on the phone open and closed without a second copy to keep in step. One line, because
+ * on the cover screen every line is a third of what there is.
+ */
+@Composable
+private fun PauseBar(viewModel: RecorderViewModel) {
+    val compact = LocalCompact.current
+    val state by viewModel.recorderState.collectAsState()
+    val pausedUntil by viewModel.pausedUntil.collectAsState()
+    if (state != RecordingService.RecorderState.RECORDING) return
+
+    val clock = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = if (compact) 0.dp else 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (pausedUntil > 0L) {
+            Text(
+                "Paused until ${clock.format(Date(pausedUntil))}",
+                color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = if (compact) 12.sp else 13.sp,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = viewModel::resumeNow) { Text("Resume", fontSize = 13.sp) }
+        } else {
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { viewModel.pauseFor(PAUSE_MINUTES) }) {
+                Text("Pause 1h", fontSize = 13.sp)
+            }
+            TextButton(onClick = { viewModel.setRecording(false) }) {
+                Text("Stop", fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+/** "Pause it for, let's say, an hour." */
+private const val PAUSE_MINUTES = 60
+
 @Composable
 fun LiveTab(viewModel: RecorderViewModel) {
     val compact = LocalCompact.current
     val hours by viewModel.todayHours.collectAsState()
 
     Column(Modifier.fillMaxSize()) {
+        PauseBar(viewModel)
         if (compact) {
             if (hours.isNotEmpty()) {
                 Text(

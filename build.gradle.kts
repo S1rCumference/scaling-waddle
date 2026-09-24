@@ -16,6 +16,19 @@ extra["targetSdkVersion"] = 35
 // nobody in this fleet owns.
 extra["ndkAbi"] = "arm64-v8a"
 
+/*
+ * Must be 1.9.0 or newer, and it is not a preference.
+ *
+ * The bundled llama.cpp AAR (ARM's AiChat wrapper) calls
+ * `Dispatchers.IO.limitedParallelism(1)`. In coroutines 1.9.0 that method gained an
+ * optional `name` parameter, which changed the synthetic default-argument bridge the
+ * compiled AAR now references. Against 1.8.1 that bridge does not exist, so constructing
+ * the inference engine threw NoSuchMethodError and *every* local model failed to load —
+ * on the phone it read "could not load qwen3-1.7b-q4.gguf: No static method
+ * limitedParallelism$default(...)".
+ */
+extra["coroutinesVersion"] = "1.10.2"
+
 tasks.register("clean", Delete::class) {
     delete(rootProject.layout.buildDirectory)
 }
