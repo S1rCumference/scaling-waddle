@@ -35,6 +35,7 @@ import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
 import com.recorder.core.storage.ModelChoice
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
@@ -236,6 +237,7 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
             ) { Text("Save Google credentials") }
         }
         Section("Diagnostics", "diagnostics") { DiagnosticsSection(viewModel) }
+        Section("Self-diagnostic report", "report") { SelfReportSection(viewModel) }
         }
         Group("Device") {
         Section("Battery and setup status", "status") {
@@ -394,6 +396,40 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
  * up on the phone — recording that would not start, a model that looked uninstalled — were
  * hard to explain: there was nowhere to look. This is that place.
  */
+/**
+ * One block of numbers about this phone, for pasting into a conversation with a model that
+ * will be asked to fix what they show. Diagnostics above is the log; this is the measurement.
+ */
+@Composable
+private fun SelfReportSection(viewModel: RecorderViewModel) {
+    val report by viewModel.selfReport.collectAsState()
+
+    Text(
+        "Collects what the AI passes cost, how much speech turned into text, how the voice " +
+            "detector has been scoring, when the phone charged or got hot, and everything " +
+            "that failed — as figures, not prose. Built on this phone; it goes nowhere until " +
+            "you copy or share it.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Row(Modifier.padding(vertical = 6.dp)) {
+        Button(onClick = viewModel::generateSelfReport) {
+            Text(if (report == null) "Generate report" else "Rebuild")
+        }
+        report?.let { text ->
+            TextButton(onClick = { viewModel.copy(text) }) { Text("Copy") }
+            TextButton(onClick = { viewModel.shareText(text) }) { Text("Share…") }
+        }
+    }
+    val text = report ?: return
+    Card(Modifier.fillMaxWidth()) {
+        Text(
+            text,
+            Modifier.padding(8.dp),
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+        )
+    }
+}
+
 @Composable
 private fun DiagnosticsSection(viewModel: RecorderViewModel) {
     val entries by viewModel.diagnostics.collectAsState()

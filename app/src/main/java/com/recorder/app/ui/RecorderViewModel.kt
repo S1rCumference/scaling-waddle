@@ -49,6 +49,7 @@ import com.recorder.core.llm.ScopedLine
 import com.recorder.core.storage.DayKey
 import com.recorder.core.storage.CorrectionRunRecord
 import com.recorder.core.storage.DaySummary
+import com.recorder.app.diag.SelfReport
 import com.recorder.core.storage.Diagnostics
 import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
@@ -413,6 +414,32 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     fun clearDiagnostics() {
         Diagnostics.clear()
         _status.value = "Diagnostics cleared"
+    }
+
+    private val _selfReport = MutableStateFlow<String?>(null)
+
+    /**
+     * The last self-diagnostic report, or null until one is asked for.
+     *
+     * Held rather than copied straight to the clipboard so it can be read on the phone as
+     * well as pasted elsewhere — and so a report taken at a particular moment stays that
+     * report while it is being looked at.
+     */
+    val selfReport: StateFlow<String?> = _selfReport.asStateFlow()
+
+    fun generateSelfReport() = viewModelScope.launch(Dispatchers.Default) {
+        _status.value = "Building report…"
+        val text = runCatching { SelfReport.build(getApplication<Application>()) }
+            .getOrElse { error ->
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                "The report could not be built: ${error.message ?: error.javaClass.simpleName}"
+            }
+        _selfReport.value = text
+        _status.value = "Report ready"
+    }
+
+    fun clearSelfReport() {
+        _selfReport.value = null
     }
 
     suspend fun segmentsByIds(ids: List<Long>): Map<Long, TranscriptSegment> =

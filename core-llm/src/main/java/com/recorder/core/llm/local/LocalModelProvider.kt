@@ -85,6 +85,7 @@ class LocalModelProvider(
                         systemPrompt = messages.systemContent(),
                         maxTokens = budget.maxTokens,
                         deadlineMs = budget.deadlineMs,
+                        label = budget.label,
                     ).trim(),
                 )
             } ?: LlmResponse.unavailable(

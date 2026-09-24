@@ -28,6 +28,7 @@ import com.recorder.core.audio.SileroVad
 import com.recorder.core.audio.SpeechSegmenter
 import com.recorder.core.audio.VoiceActivityDetector
 import com.recorder.core.audio.segmentSpeech
+import com.recorder.app.diag.DeviceWatch
 import com.recorder.core.storage.Diagnostics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -205,6 +206,7 @@ class RecordingService : Service() {
                 Diagnostics.i(TAG, "speech engine ready: ${engine.name}")
             }
             vad = detector
+            detectorName = "${detector.activeName} at $threshold"
             asr = engine
             heartbeat()
 
@@ -280,9 +282,13 @@ class RecordingService : Service() {
         while (isActive) {
             delay(HEARTBEAT_MS)
             runCatching { stats.heartbeat(TAG) }
+            // Charging, heat and battery saver decide whether the AI may run at all, so a
+            // change in any of them is worth a line with a time on it.
+            runCatching { DeviceWatch.noteChanges(this@RecordingService) }
             // Whatever the detector worked out about itself, once, when it knows.
             vad?.note()?.takeIf { it != noted }?.let {
                 noted = it
+                detectorNote = it
                 Diagnostics.i(TAG, it)
             }
         }
@@ -357,6 +363,16 @@ class RecordingService : Service() {
          * without holding a reference to a service that may not be running.
          */
         val stats = PipelineStats()
+
+        /** Which detector is live and at what threshold, e.g. "silero at 0.35". */
+        @Volatile
+        var detectorName: String? = null
+            private set
+
+        /** What the detector worked out about its own state, once it knows. */
+        @Volatile
+        var detectorNote: String? = null
+            private set
 
         private val _pausedUntil = MutableStateFlow(0L)
 

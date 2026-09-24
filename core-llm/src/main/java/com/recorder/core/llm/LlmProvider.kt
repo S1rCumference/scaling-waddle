@@ -30,6 +30,12 @@ data class TokenBudget(
     val maxTokens: Int,
     /** Wall-clock ceiling. Hit this and the answer so far is used. */
     val deadlineMs: Long,
+    /**
+     * Which job this is, for the progress bar and the self-diagnostic report. Carried on the
+     * budget because the budget is the one thing that already travels from the caller that
+     * knows what it wants down to the backend that knows what it cost.
+     */
+    val label: String = "pass",
 ) {
     companion object {
         /** Correcting n lines produces about n lines back, plus room for the model to be untidy. */
@@ -37,6 +43,7 @@ data class TokenBudget(
             TokenBudget(
                 maxTokens = (lines * TOKENS_PER_LINE + 64).coerceIn(128, 768),
                 deadlineMs = 20_000,
+                label = "correction draft",
             )
 
         /** Repairing only the marked spans is a fraction of the work of a full pass. */
@@ -44,13 +51,14 @@ data class TokenBudget(
             TokenBudget(
                 maxTokens = (spans * TOKENS_PER_LINE + 48).coerceIn(96, 384),
                 deadlineMs = 15_000,
+                label = "repair",
             )
 
         /** An open question deserves a real answer, but not an unbounded one. */
-        val ANSWER = TokenBudget(maxTokens = 512, deadlineMs = 45_000)
+        val ANSWER = TokenBudget(maxTokens = 512, deadlineMs = 45_000, label = "answer")
 
         /** A dozen one-sentence items, and no room to ramble past them. */
-        val SUMMARY = TokenBudget(maxTokens = 384, deadlineMs = 25_000)
+        val SUMMARY = TokenBudget(maxTokens = 384, deadlineMs = 25_000, label = "summary")
 
         /** A transcript line is short; 40 tokens covers a long one with room to spare. */
         private const val TOKENS_PER_LINE = 40

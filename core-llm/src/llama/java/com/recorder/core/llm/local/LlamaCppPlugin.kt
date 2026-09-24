@@ -7,6 +7,7 @@ import com.arm.aichat.InferenceEngine
 import com.arm.aichat.InferenceEngine.State
 import com.arm.aichat.UnsupportedArchitectureException
 import com.arm.aichat.isModelLoaded
+import com.recorder.core.storage.AiPasses
 import com.recorder.core.storage.Diagnostics
 import com.recorder.core.storage.RunningTasks
 import java.io.File
@@ -75,9 +76,10 @@ class LlamaCppEngine(
         systemPrompt: String?,
         maxTokens: Int,
         deadlineMs: Long,
+        label: String,
     ): String =
         turnLock.withLock {
-            RunningTasks.track("llm-generate", "Thinking") {
+            RunningTasks.track("llm-generate", "Thinking · $label") {
                 val wanted = systemPrompt?.takeIf { it.isNotBlank() }
                 val why = when {
                     !dirty -> null
@@ -134,9 +136,19 @@ class LlamaCppEngine(
                 val elapsed = System.currentTimeMillis() - startedAt
                 Diagnostics.i(
                     TAG,
-                    "turn $turnsSinceLoad: $tokens token(s) in ${"%.1f".format(elapsed / 1000.0)}s" +
+                    "turn $turnsSinceLoad ($label): $tokens token(s) in " +
+                        "${"%.1f".format(elapsed / 1000.0)}s" +
                         (stoppedBy?.let { ", cut off by $it" } ?: "") +
                         (why?.let { ", after a reload because $it" } ?: ", context reused"),
+                )
+                // The same facts as numbers, for the self-diagnostic report. A log line can
+                // be read; it cannot be averaged.
+                AiPasses.record(
+                    label = label,
+                    tokens = tokens,
+                    ms = elapsed,
+                    stoppedBy = stoppedBy,
+                    reloadedBecause = why,
                 )
                 stripThinking(out.toString())
             }

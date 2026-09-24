@@ -25,6 +25,26 @@ class PipelineStats {
     @Volatile private var decodeTimeMs = 0L
     @Volatile private var rescued = 0L
 
+    @Volatile private var peak = 0f
+    @Volatile private var bestProbability = 0f
+
+    /**
+     * The same numbers again, never reset.
+     *
+     * The heartbeat's window is cleared every minute, which is right for "is it hearing me
+     * now" and useless for "what is the transcription success rate" — a rate over sixty
+     * seconds is one or two segments. These are the totals since the process started, and
+     * they are what [Totals] hands the self-diagnostic report.
+     */
+    @Volatile private var sinceTs = 0L
+    @Volatile private var allFrames = 0L
+    @Volatile private var allSpeechFrames = 0L
+    @Volatile private var allSegments = 0L
+    @Volatile private var allTranscribed = 0L
+    @Volatile private var allRescued = 0L
+    @Volatile private var allSegmentAudioMs = 0L
+    @Volatile private var allDecodeTimeMs = 0L
+
     /**
      * How the detector's scores are spread, not just their maximum.
      *
@@ -33,12 +53,60 @@ class PipelineStats {
      * disagreeing, which is a threshold. The buckets are the cheapest thing that separates
      * them, and the self-diagnostic report reads them straight out.
      */
-    private val buckets = LongArray(BUCKETS)
-    @Volatile private var peak = 0f
-    @Volatile private var bestProbability = 0f
+    private val allBuckets = LongArray(BUCKETS)
+
+    /**
+     * Everything the pipeline has done since it started. A value type rather than a dozen
+     * getters, because the report reads all of it at once and a torn read across separate
+     * volatile fields would show a rate that never happened.
+     */
+    data class Totals(
+        val sinceTs: Long,
+        val frames: Long,
+        val speechFrames: Long,
+        val segments: Long,
+        val transcribed: Long,
+        val rescued: Long,
+        val segmentAudioMs: Long,
+        val decodeTimeMs: Long,
+        /** Detector scores in ten buckets, 0.0-0.1 first. */
+        val scoreBuckets: List<Long>,
+    ) {
+        val audioMs: Long get() = frames * PipelineStats.FRAME_MS
+
+        /** Of the segments that reached the speech model, how many produced any text. */
+        val transcribedFraction: Double? get() = if (segments > 0L) transcribed.toDouble() / segments else null
+
+        /** Decode seconds per second of speech. Above 1.0 the phone cannot keep up live. */
+        val realtimeFactor: Double? get() =
+            if (segmentAudioMs > 0L) decodeTimeMs.toDouble() / segmentAudioMs else null
+
+        /** "0.0-0.1: 8023, 0.9-1.0: 62", or null when nothing has been scored. */
+        fun scoreSpread(): String? {
+            if (scoreBuckets.sum() == 0L) return null
+            return scoreBuckets.withIndex()
+                .filter { it.value > 0L }
+                .joinToString(", ") { (i, count) -> "%.1f-%.1f: %d".format(i / 10.0, (i + 1) / 10.0, count) }
+        }
+    }
+
+    /** A consistent-enough read of the totals. Does not clear anything. */
+    fun totals(): Totals = Totals(
+        sinceTs = sinceTs,
+        frames = allFrames,
+        speechFrames = allSpeechFrames,
+        segments = allSegments,
+        transcribed = allTranscribed,
+        rescued = allRescued,
+        segmentAudioMs = allSegmentAudioMs,
+        decodeTimeMs = allDecodeTimeMs,
+        scoreBuckets = allBuckets.toList(),
+    )
 
     fun onFrame(samples: FloatArray, probability: Float, speaking: Boolean) {
         frames++
+        allFrames++
+        if (sinceTs == 0L) sinceTs = System.currentTimeMillis()
         var high = 0f
         for (s in samples) {
             val a = abs(s)
@@ -46,9 +114,11 @@ class PipelineStats {
         }
         if (high > peak) peak = high
         if (probability > bestProbability) bestProbability = probability
-        val bucket = (probability * BUCKETS).toInt().coerceIn(0, BUCKETS - 1)
-        buckets[bucket]++
-        if (speaking) speechFrames++
+        allBuckets[(probability * BUCKETS).toInt().coerceIn(0, BUCKETS - 1)]++
+        if (speaking) {
+            speechFrames++
+            allSpeechFrames++
+        }
     }
 
     /**
@@ -59,6 +129,7 @@ class PipelineStats {
     /** A window the detector never called speech, captured anyway. */
     fun onFallbackCapture() {
         rescued++
+        allRescued++
     }
 
     fun onSegment(audioMs: Long, decodeMs: Long, hadText: Boolean) {
@@ -66,6 +137,10 @@ class PipelineStats {
         segmentAudioMs += audioMs
         decodeTimeMs += decodeMs
         if (hadText) transcribed++
+        allSegments++
+        allSegmentAudioMs += audioMs
+        allDecodeTimeMs += decodeMs
+        if (hadText) allTranscribed++
     }
 
     /** Writes one line and clears the window. Returns false when nothing has happened at all. */
@@ -141,23 +216,7 @@ class PipelineStats {
         return true
     }
 
-    /**
-     * The score spread since the last call, as "0.0-0.1: 1800, 0.9-1.0: 62", or null when
-     * nothing has been scored. Reading it clears it, so two readers do not double-count.
-     */
-    fun takeScoreSpread(): String? {
-        val total = buckets.sum()
-        if (total == 0L) return null
-        val text = buckets.withIndex()
-            .filter { it.value > 0 }
-            .joinToString(", ") { (i, count) ->
-                "%.1f-%.1f: %d".format(i / 10.0, (i + 1) / 10.0, count)
-            }
-        buckets.fill(0)
-        return text
-    }
-
-    private companion object {
+    companion object {
         /** 512 samples at 16 kHz. */
         const val FRAME_MS = 32L
 

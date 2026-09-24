@@ -25,6 +25,8 @@ interface LocalLlm : Closeable {
         maxTokens: Int = 512,
         /** Wall-clock ceiling; the text produced so far is returned when it is reached. */
         deadlineMs: Long = 60_000,
+        /** Which job asked, for the progress bar and the self-diagnostic report. */
+        label: String = "pass",
     ): String
 
     /**
