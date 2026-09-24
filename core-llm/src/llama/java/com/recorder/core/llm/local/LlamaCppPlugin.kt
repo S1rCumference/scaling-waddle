@@ -5,11 +5,16 @@ import android.util.Log
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
 import com.arm.aichat.InferenceEngine.State
+import com.arm.aichat.UnsupportedArchitectureException
 import com.arm.aichat.isModelLoaded
+import com.recorder.core.storage.Diagnostics
 import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * llama.cpp through the Android library in `examples/llama.android` (ARM's AiChat wrapper),
@@ -55,10 +60,10 @@ class LlamaCppEngine(
         }
 
     private suspend fun reload() {
-        engine.cleanUp()
+        engine.readyToLoad()
         engine.loadModel(modelPath)
         val state = engine.state.first { it is State.ModelReady || it is State.Error }
-        if (state is State.Error) error("reload failed: ${state.exception.message}")
+        if (state is State.Error) error("reload failed: ${describe(state.exception)}")
         dirty = false
     }
 
@@ -91,38 +96,92 @@ class LlamaCppEngine(
             .onFailure { Log.w(TAG, "cleanUp failed", it) }
     }
 
-    private companion object {
-        const val TAG = "LlamaCppEngine"
-    }
 }
 
 /** Removes a leading reasoning block, including the empty one Qwen 3 emits under /no_think. */
 internal fun stripThinking(text: String): String =
     text.replace(Regex("(?s)<think>.*?</think>"), "").replace("<think>", "").trim()
 
+private const val TAG = "LlamaCppPlugin"
+
+/** Loading the native library and registering backends, on a cold start. */
+private const val STARTUP_TIMEOUT_MS = 30_000L
+
+/**
+ * Puts the shared engine into the one state [InferenceEngine.loadModel] accepts.
+ *
+ * The wrapper is a process-wide singleton with a strict state machine: loadModel starts
+ * with `check(state is Initialized)`, so a previous failure that left it in `Error`, or a
+ * model somebody forgot to unload leaving it in `ModelReady`, makes *every* later load
+ * throw — permanently, for the life of the process. cleanUp() is what resets both, so it
+ * is called here rather than hoping the state is already clean.
+ *
+ * The engine also starts up asynchronously (System.loadLibrary and backend registration
+ * run on its own dispatcher), so a load attempted straight after the first
+ * getInferenceEngine call can arrive while it is still Initializing.
+ */
+internal suspend fun InferenceEngine.readyToLoad() {
+    val settled = withTimeoutOrNull(STARTUP_TIMEOUT_MS) {
+        state.first { it !is State.Uninitialized && it !is State.Initializing }
+    } ?: error("the inference engine did not finish starting up")
+
+    when (settled) {
+        is State.Initialized -> Unit
+        is State.Error, is State.ModelReady -> {
+            Diagnostics.i(TAG, "resetting the engine from ${settled.label()} before loading")
+            withContext(Dispatchers.IO) { cleanUp() }
+        }
+        // Mid-generation or mid-benchmark: something else is using it, and taking the engine
+        // away would corrupt that caller's answer.
+        else -> error("the engine is busy (${settled.label()})")
+    }
+}
+
+private fun State.label(): String = when (this) {
+    is State.Error -> "Error(${exception.javaClass.simpleName})"
+    else -> javaClass.simpleName
+}
+
+/** A sentence worth putting in front of a person, from an exception that has none. */
+internal fun describe(error: Throwable): String = when {
+    error is UnsupportedArchitectureException ->
+        "llama.cpp could not open this file. Either the GGUF is damaged or truncated, or " +
+            "this build's llama.cpp does not know the model's architecture."
+
+    !error.message.isNullOrBlank() -> error.message!!
+    else -> error.javaClass.simpleName
+}
+
 class LlamaCppPlugin : LocalLlmPlugin {
 
     override suspend fun load(context: Context, modelPath: String, contextSize: Int): LocalLlm? {
         val file = File(modelPath)
         if (!file.isFile) {
-            Log.w(TAG, "model not found at $modelPath")
+            Diagnostics.w(TAG, "model not found at $modelPath")
+            return null
+        }
+        LocalModelRuntime.backendProblem(context)?.let { problem ->
+            // Worth its own message: this is a packaging fault, not a model fault, and it
+            // makes every model fail identically with nothing else to go on.
+            Diagnostics.e(TAG, problem)
             return null
         }
 
         return runCatching {
             val engine = AiChat.getInferenceEngine(context)
+            engine.readyToLoad()
             engine.loadModel(modelPath)
 
             // loadModel reports failure through state rather than always throwing.
             val state = engine.state.first { it is State.ModelReady || it is State.Error }
-            if (state is State.Error) error("engine error: ${state.exception.message}")
+            if (state is State.Error) error(describe(state.exception))
             check(engine.state.value.isModelLoaded) { "engine finished without a loaded model" }
 
             LlamaCppEngine(engine, modelPath, file.name)
-        }.onFailure { Log.w(TAG, "load failed for ${file.name}", it) }.getOrNull()
-    }
-
-    private companion object {
-        const val TAG = "LlamaCppPlugin"
+        }.onFailure { error ->
+            // This used to go to logcat only, which is unreadable on a phone with no computer
+            // attached — the app just said "runtime failed to load" with no reason anywhere.
+            Diagnostics.w(TAG, "could not load ${file.name}: ${describe(error)}", error)
+        }.getOrNull()
     }
 }

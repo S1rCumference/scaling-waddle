@@ -64,7 +64,13 @@ class LocalModelProvider(
                         maxTokens = maxTokens,
                     ).trim(),
                 )
-            } ?: LlmResponse.unavailable("Model runtime failed to load ${spec.fileName}.")
+            } ?: LlmResponse.unavailable(
+                // The reason, not just the filename. "failed to load qwen3-1.7b-q4.gguf"
+                // was true and completely useless: it named the model when the fault was in
+                // the runtime underneath it.
+                LocalModelRuntime.lastError?.let { "Could not load ${spec.fileName}: $it" }
+                    ?: "Could not load ${spec.fileName}. Settings -> Diagnostics has the detail.",
+            )
         }.getOrElse { error ->
             if (error is kotlinx.coroutines.CancellationException) throw error
             LlmResponse.failed(error.message ?: "local inference failed")

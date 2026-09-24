@@ -13,6 +13,13 @@ plugins {
  * as an update to this app. Fine for phones you own; replace it with a real private key before
  * handing this to anyone else. See README, "Signing".
  */
+/** major*10000 + minor*100 + patch — the same arithmetic CI and the updater use. */
+fun versionCodeOf(name: String): Int {
+    val parts = name.substringBefore('-').split('.')
+    fun part(i: Int) = parts.getOrNull(i)?.toIntOrNull() ?: 0
+    return part(0) * 10_000 + part(1) * 100 + part(2)
+}
+
 val keystoreFile: File = rootProject.file("signing/recorder.keystore")
 val keystorePassword = "recorder123"
 val keystoreAlias = "recorder"
@@ -30,10 +37,13 @@ android {
         minSdk = rootProject.extra["minSdkVersion"] as Int
         targetSdk = rootProject.extra["targetSdkVersion"] as Int
 
-        // Derived from the git tag in CI (see .github/workflows/android.yml) so the
-        // in-app updater can compare versions meaningfully.
-        versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
-        versionName = System.getenv("VERSION_NAME") ?: "2.1.0-dev"
+        // CI passes the version it is publishing; otherwise fall back to the branch's
+        // declared version from gradle.properties, so a local build does not claim to be
+        // something the in-app updater would immediately offer to "upgrade".
+        val declaredVersion = project.property("recorder.versionName") as String
+        versionName = System.getenv("VERSION_NAME") ?: declaredVersion
+        versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt().takeIf { it > 1 }
+            ?: versionCodeOf(declaredVersion)
 
         buildConfigField(
             "String",
@@ -114,6 +124,26 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
         jniLibs {
+            /*
+             * Extract the native libraries to disk at install time.
+             *
+             * This is not a size or speed preference — it is what makes the local AI models
+             * work at all. The bundled llama.cpp AAR is built with GGML_BACKEND_DL=ON and
+             * GGML_CPU_ALL_VARIANTS=ON, so its CPU kernels are *separate* shared libraries
+             * (libggml-cpu-android_armv8.2_1.so and friends) that the runtime dlopen()s at
+             * start-up by scanning ApplicationInfo.nativeLibraryDir.
+             *
+             * With the modern default (useLegacyPackaging = false) the .so files stay inside
+             * the APK and that directory is empty. System.loadLibrary still works, because
+             * the linker knows about the APK, but the directory scan finds nothing, no CPU
+             * backend is ever registered, and every single llama_model_load_from_file call
+             * fails. On the phone that surfaced as "Model runtime failed to load
+             * qwen3-1.7b-q4.gguf" for every model, at every tier, with nothing else wrong.
+             *
+             * sherpa-onnx is unaffected either way: it links its runtime into one .so.
+             */
+            useLegacyPackaging = true
+
             // Native libraries are merged before abiFilters is applied, so two AARs each
             // carrying an x86 libonnxruntime.so collide even though neither would ever be
             // packaged. Drop every non-arm64 ABI up front.

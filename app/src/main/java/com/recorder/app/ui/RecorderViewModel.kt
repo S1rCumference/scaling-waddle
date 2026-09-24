@@ -48,6 +48,7 @@ import com.recorder.core.storage.DaySummary
 import com.recorder.core.storage.Diagnostics
 import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
+import com.recorder.core.storage.FtsQuery
 import com.recorder.core.storage.HourSummary
 import com.recorder.core.storage.ModelChoice
 import com.recorder.core.storage.latestBySegment
@@ -65,7 +66,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -167,6 +170,47 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    // --- Search across every log ---------------------------------------------------------
+
+    private val _logQuery = MutableStateFlow("")
+
+    /** What is typed in the Logs search box. Empty means the normal grouped list. */
+    val logQuery: StateFlow<String> = _logQuery.asStateFlow()
+
+    /**
+     * Lines matching [logQuery], newest first. Every word has to appear, so adding a word
+     * narrows the list. Debounced because this runs an FTS query per keystroke otherwise.
+     */
+    @OptIn(kotlinx.coroutines.FlowPreview::class, ExperimentalCoroutinesApi::class)
+    val logMatches: StateFlow<List<TranscriptSegment>> = _logQuery
+        .debounce(SEARCH_DEBOUNCE_MS)
+        .mapLatest { raw ->
+            val query = FtsQuery.all(raw)
+            if (query.isBlank()) {
+                emptyList()
+            } else {
+                runCatching { db.transcripts().search(query, SEARCH_LIMIT) }
+                    .onFailure { Diagnostics.w(TAG, "search failed for \"$raw\"", it) }
+                    .getOrDefault(emptyList())
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun setLogQuery(query: String) {
+        _logQuery.value = query
+    }
+
+    /** Opens the hour or day a found line belongs to, so it is read in context. */
+    fun openContaining(segment: TranscriptSegment) {
+        val today = DayKey.today()
+        val group = if (DayKey.of(segment.startTs) == today) {
+            GroupRef.hour(segment.startTs)
+        } else {
+            GroupRef.day(DayKey.of(segment.startTs))
+        }
+        openGroup(group)
+    }
 
     fun selectTab(tab: AppTab) = AppUiState.selectTab(tab)
 
@@ -641,9 +685,15 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     }
 
     private companion object {
+        const val TAG = "RecorderViewModel"
+
         /** Enough history to scroll back a little on a 4 inch screen, not enough to cost. */
         const val COVER_SEGMENT_LIMIT = 60
         const val COVER_REFRESH_MS = 1_000L
+
+        /** One query per pause in typing, not one per keystroke. */
+        const val SEARCH_DEBOUNCE_MS = 250L
+        const val SEARCH_LIMIT = 80
     }
 
     suspend fun providerSettings(): Triple<String, String, String> = Triple(
@@ -673,7 +723,13 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
         val llm = LocalModelRuntime.unavailableReason
             ?: ("llama.cpp @ ${LocalModelRuntime.commit}" +
-                (LocalModelRuntime.current?.let { ", loaded: $it" } ?: ", idle"))
+                (LocalModelRuntime.current?.let { ", loaded: $it" } ?: ", idle") +
+                (LocalModelRuntime.lastError?.let { "\n  last failure: $it" }.orEmpty()))
+
+        // The kernels llama.cpp dlopen()s at start-up. An empty list here is the whole
+        // reason every model "failed to load" while looking perfectly installed.
+        val backends = LocalModelRuntime.backendProblem(context)
+            ?: LocalModelRuntime.nativeLibrarySummary(context)
 
         return """
             Device: ${Build.MANUFACTURER} ${Build.MODEL}
@@ -684,6 +740,7 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
             Speech recognition: $asr
             Local AI runtime: $llm
             Local heavy model: $heavy
+            Native libraries: $backends
 
             Displays (read this open, then closed, to learn this phone's cover display):
             ${CoverDisplays.describeAll(context)}

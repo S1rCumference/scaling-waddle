@@ -86,9 +86,17 @@ abstract class RecorderDatabase : RoomDatabase() {
 object FtsQuery {
     private val tokenPattern = Regex("[\\p{L}\\p{N}']+")
 
-    fun sanitize(raw: String): String =
+    fun sanitize(raw: String): String = join(raw, " OR ")
+
+    /**
+     * Every word must appear. This is what a search box wants: typing two words to narrow a
+     * result set should narrow it, not widen it the way an OR does.
+     */
+    fun all(raw: String): String = join(raw, " AND ")
+
+    private fun join(raw: String, operator: String): String =
         tokenPattern.findAll(raw)
             .map { it.value }
             .filter { it.length > 1 }
-            .joinToString(" OR ") { "\"$it\"" }
+            .joinToString(operator) { "\"$it\"" }
 }

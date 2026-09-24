@@ -27,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
@@ -60,15 +61,42 @@ private fun GroupList(viewModel: RecorderViewModel) {
     val today = DayKey.today()
     val earlier = days.filter { it.dayKey != today }
     var exporting by remember { mutableStateOf(false) }
+    var searching by remember { mutableStateOf(false) }
+    val query by viewModel.logQuery.collectAsState()
+    val matches by viewModel.logMatches.collectAsState()
     val state = rememberSharedListState("logs")
 
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = if (compact) 0.dp else 12.dp), state = state) {
         item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(onClick = { viewModel.openGroup(GroupRef.ALL) }) { Text("Ask about everything") }
-                TextButton(onClick = { exporting = true }) { Text("Export range") }
+            // One line, collapsed to a word until it is wanted. The live half of the screen
+            // is already the tight part; a search bar that is always open costs a line of it
+            // every day to save a tap now and then.
+            if (searching) {
+                SearchField(query, viewModel::setLogQuery) {
+                    searching = false
+                    viewModel.setLogQuery("")
+                }
+            } else {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    TextButton(onClick = { searching = true }) { Text("Search") }
+                    TextButton(onClick = { viewModel.openGroup(GroupRef.ALL) }) { Text("Ask everything") }
+                    TextButton(onClick = { exporting = true }) { Text("Export") }
+                }
             }
         }
+
+        if (query.isNotBlank()) {
+            if (matches.isEmpty()) {
+                item { EmptyState("Nothing matches \"$query\".") }
+            } else {
+                item { SectionLabel("${matches.size} match${if (matches.size == 1) "" else "es"}") }
+                items(matches, key = { "m${it.id}" }) { segment ->
+                    SearchResult(segment) { viewModel.openContaining(segment) }
+                }
+            }
+            return@LazyColumn
+        }
+
         if (hours.isNotEmpty()) {
             item { SectionLabel("Today, by hour") }
             items(hours, key = { "h${it.bucket}" }) { hour ->
@@ -92,6 +120,50 @@ private fun GroupList(viewModel: RecorderViewModel) {
 
     if (exporting) {
         RangeExportDialog(viewModel, days.map { it.dayKey }) { exporting = false }
+    }
+}
+
+/** The search box: one line, with a way back out of it. */
+@Composable
+private fun SearchField(query: String, onChange: (String) -> Unit, onClose: () -> Unit) {
+    val compact = LocalCompact.current
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        androidx.compose.material3.OutlinedTextField(
+            value = query,
+            onValueChange = onChange,
+            singleLine = true,
+            placeholder = { Text("Search every log", fontSize = if (compact) 13.sp else 15.sp) },
+            textStyle = androidx.compose.ui.text.TextStyle(fontSize = if (compact) 13.sp else 15.sp),
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onClose) { Text("Close") }
+    }
+}
+
+/** One found line: when it was said, and enough of it to recognise. Tapping opens its group. */
+@Composable
+private fun SearchResult(
+    segment: com.recorder.core.storage.TranscriptSegment,
+    onClick: () -> Unit,
+) {
+    val compact = LocalCompact.current
+    val stamp = SimpleDateFormat(
+        if (DayKey.of(segment.startTs) == DayKey.today()) "HH:mm" else "d MMM HH:mm",
+        Locale.getDefault(),
+    ).format(Date(segment.startTs))
+
+    if (compact) {
+        Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 6.dp)) {
+            Text(stamp, color = CoverColors.dim, fontSize = 11.sp)
+            Text(segment.text, color = Color.White, fontSize = 14.sp, maxLines = 3)
+        }
+    } else {
+        Card(Modifier.fillMaxWidth().padding(vertical = 3.dp).clickable(onClick = onClick)) {
+            Column(Modifier.padding(12.dp)) {
+                Text(stamp, style = MaterialTheme.typography.labelSmall)
+                Text(segment.text, style = MaterialTheme.typography.bodyMedium, maxLines = 3)
+            }
+        }
     }
 }
 

@@ -89,6 +89,51 @@ object LocalModelRuntime {
     fun modelDir(context: Context): File = File(context.filesDir, "models/llm").apply { mkdirs() }
 
     /**
+     * Why the last load failed, in a sentence, or null if the last one worked. Shown in the
+     * UI instead of "Model runtime failed to load <file>", which named the model and told
+     * you nothing about the actual fault.
+     */
+    @Volatile
+    var lastError: String? = null
+        private set
+
+    /**
+     * Checks that llama.cpp's CPU kernels are where it will look for them, or says what is
+     * wrong. Null means fine.
+     *
+     * The bundled AAR is built with GGML_BACKEND_DL=ON and GGML_CPU_ALL_VARIANTS=ON, so the
+     * kernels are separate `libggml-cpu-*.so` files that llama.cpp dlopen()s at start-up by
+     * scanning ApplicationInfo.nativeLibraryDir. If the APK does not extract its native
+     * libraries at install time that directory is empty, no backend is registered, and every
+     * model fails to load with no other symptom — which is exactly what happened. The APK now
+     * sets useLegacyPackaging, and this is the check that says so out loud if it ever stops.
+     */
+    fun backendProblem(context: Context): String? {
+        if (!available) return null
+        val dir = File(context.applicationInfo.nativeLibraryDir)
+        val names = dir.listFiles()?.map { it.name }.orEmpty()
+        return when {
+            names.isEmpty() ->
+                "The app's native libraries are not on disk ($dir is empty), so llama.cpp " +
+                    "cannot load its CPU kernels. This build needs extracted native libraries."
+
+            names.none { it.startsWith("libggml-cpu") } ->
+                "llama.cpp's CPU kernels (libggml-cpu-*.so) are missing from $dir. Found: " +
+                    names.sorted().joinToString(", ").take(300)
+
+            else -> null
+        }
+    }
+
+    /** What is on disk next to the app, for the diagnostics screen. */
+    fun nativeLibrarySummary(context: Context): String {
+        val dir = File(context.applicationInfo.nativeLibraryDir)
+        val names = dir.listFiles()?.map { it.name }?.sorted().orEmpty()
+        if (names.isEmpty()) return "No native libraries extracted to $dir"
+        return "${names.size} native libraries in $dir: ${names.joinToString(", ")}"
+    }
+
+    /**
      * Loads [model], evicting whatever was resident. Returns null when the runtime is not
      * bundled or the load fails — never throws, because a failed model load must not take
      * the recorder down with it.
@@ -105,17 +150,27 @@ object LocalModelRuntime {
                 evict()
             }
 
+            backendProblem(context)?.let { problem ->
+                lastError = problem
+                Diagnostics.e(TAG, problem)
+                return@withLock null
+            }
+
             runCatching {
                 val plugin = Class.forName(PLUGIN)
                     .getDeclaredConstructor()
                     .newInstance() as LocalLlmPlugin
                 plugin.load(context, model.path, contextSize)
-            }.onFailure { Diagnostics.w(TAG, "failed to load ${model.fileName}", it) }
+            }.onFailure {
+                lastError = it.message ?: it.javaClass.simpleName
+                Diagnostics.w(TAG, "failed to load ${model.fileName}", it)
+            }
                 .getOrNull()
                 ?.also {
                     resident = it
                     residentPath = model.path
                     loadCount++
+                    lastError = null
                 }
         }
 

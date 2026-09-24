@@ -31,3 +31,21 @@ class FtsQueryTest {
         assertEquals("", FtsQuery.sanitize("   ?  !"))
     }
 }
+
+class FtsQueryAllTest {
+
+    @Test
+    fun `every word must appear`() {
+        assertEquals("\"invoice\" AND \"tuesday\"", FtsQuery.all("invoice tuesday"))
+    }
+
+    @Test
+    fun `punctuation and one-letter words are dropped`() {
+        assertEquals("\"paid\" AND \"yet\"", FtsQuery.all("paid? a yet!"))
+    }
+
+    @Test
+    fun `nothing searchable gives an empty query rather than a broken one`() {
+        assertEquals("", FtsQuery.all("  ?  "))
+    }
+}
