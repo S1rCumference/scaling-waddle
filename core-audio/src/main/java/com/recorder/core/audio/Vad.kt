@@ -17,6 +17,13 @@ interface VoiceActivityDetector : Closeable {
 
     fun reset()
 
+    /**
+     * Something the detector has noticed about itself worth putting in front of a person,
+     * or null. Read rather than logged, because core-audio has no idea how the app records
+     * anything and logcat is unreadable on a phone with no computer attached.
+     */
+    fun note(): String? = null
+
     override fun close() {}
 }
 
@@ -111,7 +118,10 @@ class SileroVad private constructor(
                 val probability = result.value(probabilityOutput).firstProbability()
                 when (layout) {
                     Layout.V5_STATE ->
-                        stateOutput?.let { state = result.value(it).flattenFloats(state.size) }
+                        stateOutput?.let {
+                            state = result.value(it).flattenFloats(state.size)
+                            checkStateIsAlive()
+                        }
 
                     Layout.V4_HC -> {
                         hOutput?.let { h = result.value(it).flattenFloats(h.size) }
@@ -125,10 +135,50 @@ class SileroVad private constructor(
         }
     }
 
+    /**
+     * Whether the recurrent state is actually coming back, checked once per session.
+     *
+     * A detector that scores near zero on every frame looks identical whether it is right
+     * about the room or its memory is being silently dropped, and the two have completely
+     * different fixes. A state that is still all zeros after real audio has gone through it,
+     * or that contains anything non-finite, is the second case and says so out loud rather
+     * than leaving it to be inferred from suspiciously flat scores.
+     *
+     * Runs on the first few frames only; after that the answer cannot change.
+     */
+    private fun checkStateIsAlive() {
+        if (stateChecked) return
+        framesSeen++
+        if (framesSeen < STATE_CHECK_AFTER) return
+        stateChecked = true
+
+        val allZero = state.all { it == 0f }
+        val broken = state.any { !it.isFinite() }
+        stateNote = when {
+            broken -> "Silero's state contains NaN or infinity — its memory is corrupt"
+            allZero ->
+                "Silero's state is still all zeros after $framesSeen frames — it is not " +
+                    "remembering anything between frames"
+
+            else -> "Silero's state is updating (${state.count { it != 0f }} of ${state.size} non-zero)"
+        }
+        Log.i(TAG, stateNote.orEmpty())
+    }
+
+    override fun note(): String? = stateNote
+
+    @Volatile
+    private var stateNote: String? = null
+    private var stateChecked = false
+    private var framesSeen = 0
+
     override fun reset() {
         state = FloatArray(state.size)
         h = FloatArray(h.size)
         c = FloatArray(c.size)
+        stateChecked = false
+        framesSeen = 0
+        stateNote = null
     }
 
     override fun close() {
@@ -137,6 +187,9 @@ class SileroVad private constructor(
 
     companion object {
         private const val TAG = "SileroVad"
+
+        /** Enough frames for real audio to have moved the state, without waiting around. */
+        private const val STATE_CHECK_AFTER = 30
 
         fun tryLoad(modelFile: File): SileroVad? {
             if (!modelFile.isFile) {

@@ -148,6 +148,9 @@ class ResilientVad(
         return true
     }
 
+    /** Whatever the detector doing the work has to say about itself. */
+    override fun note(): String? = if (fallenBack) fallback.note() else primaryVad?.note()
+
     override fun reset() {
         runCatching { primaryVad?.reset() }
         fallback.reset()

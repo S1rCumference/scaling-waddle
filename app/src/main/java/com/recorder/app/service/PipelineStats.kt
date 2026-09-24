@@ -24,6 +24,16 @@ class PipelineStats {
     @Volatile private var segmentAudioMs = 0L
     @Volatile private var decodeTimeMs = 0L
     @Volatile private var rescued = 0L
+
+    /**
+     * How the detector's scores are spread, not just their maximum.
+     *
+     * "Best 0.00" and "best 0.22" look like the same failure and are not: one is a detector
+     * pinned at zero, which is a bug, and the other is a detector that is working and
+     * disagreeing, which is a threshold. The buckets are the cheapest thing that separates
+     * them, and the self-diagnostic report reads them straight out.
+     */
+    private val buckets = LongArray(BUCKETS)
     @Volatile private var peak = 0f
     @Volatile private var bestProbability = 0f
 
@@ -36,6 +46,8 @@ class PipelineStats {
         }
         if (high > peak) peak = high
         if (probability > bestProbability) bestProbability = probability
+        val bucket = (probability * BUCKETS).toInt().coerceIn(0, BUCKETS - 1)
+        buckets[bucket]++
         if (speaking) speechFrames++
     }
 
@@ -129,9 +141,28 @@ class PipelineStats {
         return true
     }
 
+    /**
+     * The score spread since the last call, as "0.0-0.1: 1800, 0.9-1.0: 62", or null when
+     * nothing has been scored. Reading it clears it, so two readers do not double-count.
+     */
+    fun takeScoreSpread(): String? {
+        val total = buckets.sum()
+        if (total == 0L) return null
+        val text = buckets.withIndex()
+            .filter { it.value > 0 }
+            .joinToString(", ") { (i, count) ->
+                "%.1f-%.1f: %d".format(i / 10.0, (i + 1) / 10.0, count)
+            }
+        buckets.fill(0)
+        return text
+    }
+
     private companion object {
         /** 512 samples at 16 kHz. */
         const val FRAME_MS = 32L
+
+        /** Ten buckets: 0.0-0.1, 0.1-0.2, and so on. Enough shape, no more. */
+        const val BUCKETS = 10
 
         /** -46 dBFS. Below this a phone microphone is reporting a dead line, not a quiet room. */
         const val SILENT_LEVEL = 0.005f

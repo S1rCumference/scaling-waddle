@@ -63,8 +63,6 @@ class RecordingService : Service() {
      */
     private var asr: SwappableAsrEngine? = null
 
-    private val stats = PipelineStats()
-
     /** Whether the last frame was dropped, so the detector is reset once per transition. */
     private var wasPaused = false
 
@@ -278,9 +276,15 @@ class RecordingService : Service() {
      * instead of from logcat, which is unreachable on this device.
      */
     private fun heartbeat() = scope.launch {
+        var noted: String? = null
         while (isActive) {
             delay(HEARTBEAT_MS)
             runCatching { stats.heartbeat(TAG) }
+            // Whatever the detector worked out about itself, once, when it knows.
+            vad?.note()?.takeIf { it != noted }?.let {
+                noted = it
+                Diagnostics.i(TAG, it)
+            }
         }
     }
 
@@ -348,6 +352,12 @@ class RecordingService : Service() {
 
         /** Observable so the UI can show whether recording is actually running. */
         val state: StateFlow<RecorderState> = _state.asStateFlow()
+
+        /**
+         * Pipeline counters, on the companion so the self-diagnostic report can read them
+         * without holding a reference to a service that may not be running.
+         */
+        val stats = PipelineStats()
 
         private val _pausedUntil = MutableStateFlow(0L)
 
