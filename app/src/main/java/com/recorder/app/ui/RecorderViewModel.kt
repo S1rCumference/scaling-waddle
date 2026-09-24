@@ -40,6 +40,8 @@ import com.recorder.core.llm.GroupAssistant
 import com.recorder.core.llm.ScopedLine
 import com.recorder.core.storage.DayKey
 import com.recorder.core.storage.DaySummary
+import com.recorder.core.storage.Diagnostics
+import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
 import com.recorder.core.storage.HourSummary
 import com.recorder.core.storage.ModelChoice
@@ -269,6 +271,21 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     fun clearConversation(group: GroupRef) = AppUiState.clearConversation(group.id)
 
+    // --- Diagnostics: what went wrong, readable from the phone alone ---
+
+    val diagnostics: StateFlow<List<DiagnosticEntry>> = Diagnostics.entries
+
+    fun diagnosticsText(): String = Diagnostics.renderText(deviceSummary())
+
+    fun copyDiagnostics() = copy(diagnosticsText())
+
+    fun shareDiagnostics() = shareText(diagnosticsText())
+
+    fun clearDiagnostics() {
+        Diagnostics.clear()
+        _status.value = "Diagnostics cleared"
+    }
+
     suspend fun segmentsByIds(ids: List<Long>): Map<Long, TranscriptSegment> =
         ids.distinct().chunked(900).flatMap { db.transcripts().byIds(it) }.associateBy { it.id }
 
@@ -323,20 +340,11 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     // --- Two versions side by side ---
 
-    private val _micWarning = MutableStateFlow<String?>(null)
-
-    /** Set when another installed Recorder appears to hold the microphone. */
-    val micWarning: StateFlow<String?> = _micWarning.asStateFlow()
-
-    fun checkMicConflict(): Boolean {
-        _micWarning.value = MicConflict.warning(getApplication())
-        return _micWarning.value != null
-    }
-
-    fun dismissMicWarning() {
-        _micWarning.value = null
-    }
-
+    /**
+     * Opens the other installed version of Recorder — reached from the silencing banner
+     * ([RecorderApp]'s SilencedBanner), which shows when this app's own recording has
+     * actually gone silent, rather than from any guess made before starting.
+     */
     fun openOtherRecorder() {
         if (!MicConflict.openOther(getApplication())) _status.value = "Could not open the other Recorder."
     }

@@ -1,6 +1,7 @@
 package com.recorder.app.service
 
 import android.util.Log
+import com.recorder.core.storage.Diagnostics
 import com.recorder.core.asr.AsrEngine
 import com.recorder.core.audio.SpeechSegment
 import com.recorder.core.llm.FolderClassifier
@@ -32,7 +33,7 @@ class TranscriptPipeline(
         val startedAt = System.nanoTime()
         val text = runCatching { asr.transcribe(segment.samples, segment.sampleRate) }
             .getOrElse { error ->
-                Log.w(TAG, "transcription failed", error)
+                Diagnostics.w(TAG, "transcription failed", error)
                 return
             }
         PowerMetrics.recordTranscription(

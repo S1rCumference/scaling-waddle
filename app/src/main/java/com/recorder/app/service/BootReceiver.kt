@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.recorder.core.storage.Diagnostics
 import com.recorder.app.R
 import com.recorder.app.ServiceLocator
 import com.recorder.app.admin.DeviceOwner
@@ -50,18 +51,18 @@ class BootReceiver : BroadcastReceiver() {
 
                 when (ResumeDecision.afterBoot(enabled, DeviceOwner(context).isActive)) {
                     ResumeAction.NOTHING ->
-                        Log.i(TAG, "recording is switched off; leaving it alone after $action")
+                        Diagnostics.i(TAG, "recording is switched off; leaving it alone after $action")
 
                     ResumeAction.START_DIRECTLY -> {
-                        Log.i(TAG, "device owner; starting directly after $action")
+                        Diagnostics.i(TAG, "device owner; starting directly after $action")
                         RecordingService.start(context).onFailure { error ->
-                            Log.w(TAG, "direct start refused after $action", error)
+                            Diagnostics.w(TAG, "direct start refused after $action", error)
                             ResumeNotifier.show(context, context.getString(R.string.resume_reason_boot))
                         }
                     }
 
                     ResumeAction.ASK_WITH_NOTIFICATION -> {
-                        Log.i(TAG, "asking for a tap to resume after $action")
+                        Diagnostics.i(TAG, "asking for a tap to resume after $action")
                         ResumeNotifier.show(context, context.getString(R.string.resume_reason_boot))
                     }
                 }

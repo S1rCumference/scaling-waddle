@@ -137,11 +137,15 @@ private fun PermissionsStep() {
     ) { result ->
         micGranted = result[Manifest.permission.RECORD_AUDIO] ?: micGranted
         notifGranted = result[Manifest.permission.POST_NOTIFICATIONS] ?: notifGranted
-        // Not if the other installed Recorder holds the mic: one of the two would record silence.
-        if (micGranted && MicConflict.warning(context) == null) RecordingService.start(context)
+        if (micGranted) RecordingService.start(context)
     }
 
-    val conflict = remember(micGranted) { MicConflict.warning(context) }
+    // If another installed Recorder actually has the microphone, that shows up honestly once
+    // recording is running — RecorderApp's silencing banner reacts to this app's own capture
+    // actually going silent. Guessing about it here, before starting, could not be done
+    // reliably (see MicConflict's doc comment) and used to block setup on ordinary, unrelated
+    // microphone use such as an assistant hotword.
+    val otherVersionInstalled = remember { MicConflict.otherVersions(context).isNotEmpty() }
 
     Heading("Two permissions")
     Body("Microphone — so it can hear. Without this the app does nothing at all.")
@@ -173,26 +177,37 @@ private fun PermissionsStep() {
         }
     }
 
-    if (conflict != null) {
-        Body(conflict)
-        TextButton(onClick = { MicConflict.openOther(context) }) { Text("Open the other Recorder") }
-        TextButton(onClick = { RecordingService.start(context) }) { Text("I've stopped it — record here") }
+    if (otherVersionInstalled) {
+        Body(
+            "Another version of Recorder is installed. Android gives the microphone to one app " +
+                "at a time — if recording ever looks stuck, check whether the other one is using it.",
+        )
     }
 }
 
 @Composable
 private fun ModelsStep(viewModel: SetupViewModel) {
+    val context = LocalContext.current
     val models by viewModel.models.collectAsState()
     val installing by viewModel.installing.collectAsState()
     val pending = viewModel.pendingBytes()
     val free = viewModel.freeBytes()
     val unmetered = viewModel.onUnmeteredNetwork()
+    val otherVersionInstalled = remember { MicConflict.otherVersions(context).isNotEmpty() }
 
     Heading("Download what it needs to hear you")
     Body(
         "These files do the transcription on the phone. They are downloaded once and then " +
             "work offline forever.",
     )
+    if (otherVersionInstalled) {
+        Body(
+            "Another version of Recorder is installed. Android keeps every app's files " +
+                "separate, even between versions of the same app, so its downloaded models " +
+                "are not visible here — this needs its own copy, even if you already " +
+                "downloaded them once for the other one.",
+        )
+    }
 
     if (!unmetered) {
         Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {

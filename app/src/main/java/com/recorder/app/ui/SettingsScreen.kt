@@ -25,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.Alignment
+import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
 import com.recorder.core.storage.ModelChoice
 import androidx.compose.ui.Modifier
@@ -331,6 +332,66 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
                     viewModel.deviceSummary(),
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(12.dp),
+                )
+            }
+        }
+        Section("Diagnostics", "diagnostics") { DiagnosticsSection(viewModel) }
+    }
+}
+
+/**
+ * What went wrong, without a computer. This is the whole reason bugs in 2.1 that only showed
+ * up on the phone — recording that would not start, a model that looked uninstalled — were
+ * hard to explain: there was nowhere to look. This is that place.
+ */
+@Composable
+private fun DiagnosticsSection(viewModel: RecorderViewModel) {
+    val entries by viewModel.diagnostics.collectAsState()
+    val clock = remember { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()) }
+
+    Text(
+        "The last ${entries.size} things worth knowing about — recording starting or " +
+            "refusing to start, a model that failed to load or download, corrections that " +
+            "could not run. Nothing here is sent anywhere; Copy or Share sends it only where " +
+            "you choose.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Row(Modifier.padding(vertical = 6.dp)) {
+        Button(onClick = viewModel::copyDiagnostics) { Text("Copy") }
+        TextButton(onClick = viewModel::shareDiagnostics) { Text("Share…") }
+        TextButton(onClick = viewModel::clearDiagnostics) { Text("Clear") }
+    }
+    if (entries.isEmpty()) {
+        Text("Nothing logged yet.", style = MaterialTheme.typography.bodySmall)
+        return
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(8.dp)) {
+            entries.take(40).forEach { entry ->
+                val color = when (entry.level) {
+                    DiagnosticEntry.Level.ERROR -> MaterialTheme.colorScheme.error
+                    DiagnosticEntry.Level.WARN -> MaterialTheme.colorScheme.tertiary
+                    DiagnosticEntry.Level.INFO -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                    Text(
+                        clock.format(java.util.Date(entry.timestamp)),
+                        color = color,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(end = 8.dp),
+                    )
+                    Text(
+                        "${entry.tag}: ${entry.message}",
+                        color = color,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            if (entries.size > 40) {
+                Text(
+                    "…and ${entries.size - 40} older entries. Share to see everything.",
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(top = 4.dp),
                 )
             }
         }

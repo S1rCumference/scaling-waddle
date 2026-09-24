@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.StatFs
 import android.util.Log
+import com.recorder.core.storage.Diagnostics
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -125,10 +126,10 @@ class ModelInstaller(private val context: Context) {
             onProgress(InstallProgress.Done)
             Result.success(Unit)
         } catch (io: IOException) {
-            Log.w(TAG, "install failed for ${entry.id}", io)
+            Diagnostics.w(TAG, "model download failed for ${entry.id}", io)
             fail(onProgress, io.message ?: "Download failed.", retryable = true)
         } catch (t: Throwable) {
-            Log.e(TAG, "install failed for ${entry.id}", t)
+            Diagnostics.e(TAG, "model install failed for ${entry.id}", t)
             fail(onProgress, t.message ?: "Install failed.", retryable = false)
         }
     }

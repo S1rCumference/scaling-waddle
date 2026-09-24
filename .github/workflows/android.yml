@@ -217,8 +217,10 @@ jobs:
 
   pages:
     # Publishes the install page people download from. Runs after a release so it can embed
-    # that build's real digests and a provisioning QR generated from its signing
-    # certificate; also runnable by hand so the page exists before the first release.
+    # that build's real digests for whichever line triggered it; also runnable by hand so the
+    # page exists before the first release. The device-owner provisioning QR is unrelated to
+    # which tag triggered this — see build_install_page.sh — and only needs the JDK below,
+    # for keytool.
     needs: [release]
     if: always() && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
@@ -232,10 +234,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
-          packages: platform-tools
+          distribution: temurin
+          java-version: "17"
 
       # Best effort: present on a tagged run, absent on a manual one, and the page builder
       # handles both.

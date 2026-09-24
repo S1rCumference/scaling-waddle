@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -99,7 +98,6 @@ fun RecorderApp(viewModel: RecorderViewModel, onRunSetup: () -> Unit) {
         } else {
             RecorderTheme { ExpandedShell(viewModel, onRunSetup) }
         }
-        MicWarningDialog(viewModel)
         CapabilitiesDialog(viewModel)
     }
 }
@@ -345,29 +343,6 @@ private fun SilencedBanner(viewModel: RecorderViewModel) {
         style = MaterialTheme.typography.bodySmall,
         modifier = Modifier.fillMaxWidth().padding(8.dp)
             .clickable { viewModel.openOtherRecorder() },
-    )
-}
-
-@Composable
-private fun MicWarningDialog(viewModel: RecorderViewModel) {
-    val warning by viewModel.micWarning.collectAsState()
-    val message = warning ?: return
-    AlertDialog(
-        onDismissRequest = viewModel::dismissMicWarning,
-        title = { Text("Stop the other Recorder first") },
-        text = { Text(message) },
-        confirmButton = {
-            TextButton(onClick = {
-                viewModel.dismissMicWarning()
-                viewModel.openOtherRecorder()
-            }) { Text("Open the other Recorder") }
-        },
-        dismissButton = {
-            TextButton(onClick = {
-                viewModel.dismissMicWarning()
-                viewModel.setRecording(true)
-            }) { Text("I've stopped it — record here") }
-        },
     )
 }
 

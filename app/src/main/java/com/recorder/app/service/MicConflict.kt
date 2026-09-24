@@ -2,12 +2,28 @@ package com.recorder.app.service
 
 import android.content.Context
 import android.content.Intent
-import android.media.AudioManager
 
 /**
- * Two versions of Recorder can be installed side by side, but only one can have the
- * microphone. Android does not fail the second one — from Android 10 it quietly feeds one of
- * them silence — so without this check a version could "record" all day and keep nothing.
+ * Two versions of Recorder can be installed side by side, but only one can hold the
+ * microphone — Android gives it to one app at a time and quietly feeds the other silence
+ * (see [com.recorder.core.audio.AudioCapture]'s own silencing detector, which is what
+ * actually tells this app that has happened to *its own* recording).
+ *
+ * This object used to also guess, before starting, whether the sibling app was already
+ * recording — by comparing the *count* of [android.media.AudioManager.getActiveRecordingConfigurations]
+ * against this app's own state. That guess was wrong far more often than it was right: Android
+ * anonymizes every entry in that list for an app without the privileged `MODIFY_AUDIO_ROUTING`
+ * permission (uid and package name are both stripped — confirmed by reading
+ * `AudioRecordingConfiguration.anonymizedCopy()` in AOSP), so this app cannot tell "the
+ * sibling Recorder has the mic" apart from "a hotword detector, a call, or literally any other
+ * app has the mic." On a phone with an assistant hotword enabled — the out-of-box default on
+ * most Android phones — that made the guess misfire on ordinary, unrelated microphone use,
+ * blocking recording behind a dialog that had nothing to do with the sibling app at all.
+ *
+ * So this only does what can actually be verified: which other package ids of this app are
+ * installed. Whether one of them is *recording* is answered honestly, after the fact, by the
+ * silencing banner — which reacts to this app's own capture actually going silent, not to a
+ * guess about what caused it.
  */
 object MicConflict {
 
@@ -27,27 +43,6 @@ object MicConflict {
         .filter { id ->
             runCatching { context.packageManager.getPackageInfo(id, 0) }.isSuccess
         }
-
-    /** True when something is recording from the microphone and it is not this app. */
-    fun someoneElseRecording(context: Context): Boolean {
-        val configs = context.getSystemService(AudioManager::class.java)
-            ?.activeRecordingConfigurations.orEmpty()
-        val mine = if (RecordingService.state.value == RecordingService.RecorderState.RECORDING) 1 else 0
-        return configs.size > mine
-    }
-
-    /**
-     * What to tell the user before starting, or null when there is nothing to warn about.
-     * Only speaks up when another version is installed *and* the microphone is busy, so a
-     * phone call or a voice note does not trigger it.
-     */
-    fun warning(context: Context): String? {
-        val others = otherVersions(context)
-        if (others.isEmpty() || !someoneElseRecording(context)) return null
-        return "Another version of Recorder looks like it is recording. Android gives the " +
-            "microphone to one app at a time, so one of the two would record silence all day. " +
-            "Open the other Recorder, switch its recording off, then come back here."
-    }
 
     /** Opens the other installed version, so its recording can be switched off. */
     fun openOther(context: Context): Boolean {

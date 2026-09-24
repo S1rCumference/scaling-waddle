@@ -118,6 +118,35 @@
                 <action android:name="android.app.action.PROFILE_PROVISIONING_COMPLETE" />
             </intent-filter>
         </receiver>
+
+        <!--
+            Required since Android 12 (S) for QR-code device-owner provisioning to complete at
+            all: without these two, the system fails provisioning with a generic error before
+            RecorderDeviceAdminReceiver ever runs. See DevicePolicyManager's own documentation
+            for ACTION_PROVISION_MANAGED_DEVICE, and GetProvisioningModeActivity's doc comment.
+            Exported so the system's provisioning flow can launch them; BIND_DEVICE_ADMIN
+            restricts that to the platform itself, the same guard the receiver above uses.
+        -->
+        <activity
+            android:name=".admin.GetProvisioningModeActivity"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.app.action.GET_PROVISIONING_MODE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".admin.PolicyComplianceActivity"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.app.action.ADMIN_POLICY_COMPLIANCE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
         <!-- Hands a downloaded update APK to the system installer. -->
         <provider
             android:name="androidx.core.content.FileProvider"

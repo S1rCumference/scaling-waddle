@@ -76,17 +76,17 @@ class MainActivity : ComponentActivity() {
                 add(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
-        if (needed.isEmpty()) startUnlessConflict() else permissionLauncher.launch(needed.toTypedArray())
+        if (needed.isEmpty()) startRecording() else permissionLauncher.launch(needed.toTypedArray())
     }
 
     /**
-     * Starts recording — unless another installed version of Recorder is holding the mic, in
-     * which case the user is asked to stop that one first rather than one of them silently
-     * recording nothing. Already recording means there is nothing to check.
+     * Starts recording. If another installed version of Recorder actually has the microphone,
+     * that shows up honestly afterward — [com.recorder.app.ui.RecorderApp]'s silencing banner
+     * reacts to this app's own capture actually going silent — rather than being guessed at
+     * beforehand, which could not be done reliably (see [com.recorder.app.service.MicConflict]).
      */
-    private fun startUnlessConflict() {
+    private fun startRecording() {
         if (RecordingService.state.value == RecordingService.RecorderState.RECORDING) return
-        if (viewModel.checkMicConflict()) return
         RecordingService.start(this)
     }
 }

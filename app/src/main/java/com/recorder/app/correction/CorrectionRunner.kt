@@ -1,6 +1,5 @@
 package com.recorder.app.correction
 
-import android.util.Log
 import com.recorder.app.ServiceLocator
 import com.recorder.core.llm.CorrectionWindow
 import com.recorder.core.llm.DayVocabulary
@@ -8,6 +7,7 @@ import com.recorder.core.llm.TranscriptCorrector
 import com.recorder.core.storage.CorrectionPass
 import com.recorder.core.storage.DayKey
 import com.recorder.core.storage.DayPass
+import com.recorder.core.storage.Diagnostics
 import com.recorder.core.storage.SegmentCorrection
 import com.recorder.core.storage.TranscriptSegment
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -145,7 +145,7 @@ object CorrectionRunner {
         val result = TranscriptCorrector(chosen.provider)
             .correct(CorrectionWindow(before, targets, after, vocabulary))
         val corrected = result.getOrElse { error ->
-            Log.i(TAG, "correction skipped: ${error.message}")
+            Diagnostics.w(TAG, "correction skipped: ${error.message}")
             lastError = error.message
             return -1
         }

@@ -10,7 +10,6 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.recorder.app.BuildConfig
@@ -28,6 +27,7 @@ import com.recorder.core.audio.SileroVad
 import com.recorder.core.audio.SpeechSegmenter
 import com.recorder.core.audio.VoiceActivityDetector
 import com.recorder.core.audio.segmentSpeech
+import com.recorder.core.storage.Diagnostics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -71,13 +71,14 @@ class RecordingService : Service() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
         ) {
-            Log.w(TAG, "RECORD_AUDIO not granted; stopping")
+            Diagnostics.w(TAG, "RECORD_AUDIO not granted; stopping")
             updateNotification(getString(R.string.notification_no_permission))
             _state.value = RecorderState.NEEDS_PERMISSION
             stopSelf()
             return
         }
 
+        Diagnostics.i(TAG, "recording service starting")
         startPipeline()
         correctionLoop.start(scope)
 
@@ -119,8 +120,15 @@ class RecordingService : Service() {
             val threshold = settings.vadThreshold.first()
 
             val detector = SileroVad.tryLoad(AsrModels.sileroVadFile(this@RecordingService))
-                ?: EnergyVad()
+                ?: EnergyVad().also { Diagnostics.w(TAG, "Silero VAD not available; using the energy fallback") }
             val engine = AsrEngineFactory.create(this@RecordingService, threads)
+            if (!AsrEngineFactory.sherpaBundled) {
+                Diagnostics.w(TAG, "sherpa-onnx not bundled in this build; recording produces no text")
+            } else if (!AsrEngineFactory.modelsInstalled(this@RecordingService)) {
+                Diagnostics.w(TAG, "speech model not installed yet; recording produces no text")
+            } else {
+                Diagnostics.i(TAG, "speech engine ready: ${engine.name}")
+            }
             vad = detector
             asr = engine
 
@@ -147,11 +155,15 @@ class RecordingService : Service() {
 
             AudioCapture(onSilencedChanged = { silenced ->
                 _micSilenced.value = silenced
-                if (silenced) Log.w(TAG, "microphone is being given to another app; this recording is silent")
+                if (silenced) {
+                    Diagnostics.w(TAG, "microphone is being given to another app; this recording is silent")
+                } else {
+                    Diagnostics.i(TAG, "microphone silencing cleared")
+                }
             }).frames()
                 .segmentSpeech(detector, SpeechSegmenter(threshold = threshold))
                 .catch { error ->
-                    Log.e(TAG, "capture pipeline failed", error)
+                    Diagnostics.e(TAG, "capture pipeline failed", error)
                     _state.value = RecorderState.ERROR
                     updateNotification(getString(R.string.notification_error))
                 }
@@ -240,18 +252,19 @@ class RecordingService : Service() {
             val blocked = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                 error is android.app.ForegroundServiceStartNotAllowedException
             when {
-                blocked -> Log.w(TAG, "foreground start not allowed from here", error)
+                blocked -> Diagnostics.w(TAG, "foreground start not allowed from here", error)
                 error is SecurityException ->
                     // The while-in-use case: the system does not consider the microphone
                     // permission held because the app is in the background.
-                    Log.w(TAG, "microphone not available to a background start", error)
+                    Diagnostics.w(TAG, "microphone not available to a background start", error)
 
-                else -> Log.w(TAG, "could not start recording", error)
+                else -> Diagnostics.w(TAG, "could not start recording", error)
             }
             _state.value = RecorderState.STOPPED
         }
 
         fun stop(context: Context) {
+            Diagnostics.i(TAG, "recording stopped")
             context.stopService(Intent(context, RecordingService::class.java))
         }
     }

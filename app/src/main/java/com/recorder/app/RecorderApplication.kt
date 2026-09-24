@@ -10,12 +10,15 @@ import com.recorder.app.service.ResumeNotifier
 import com.recorder.app.work.FolderFilingWorker
 import com.recorder.app.work.HeavySyncScheduler
 import com.recorder.app.work.RecordingWatchdog
+import com.recorder.core.storage.Diagnostics
 
 class RecorderApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
+        Diagnostics.init(this)
+        Diagnostics.i("RecorderApplication", "process started, version ${BuildConfig.VERSION_NAME}")
         ServiceLocator.init(this)
         AppUiState.init(this)
         HeavySyncScheduler.ensureScheduled(this)

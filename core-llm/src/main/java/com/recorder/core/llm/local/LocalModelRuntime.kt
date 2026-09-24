@@ -3,6 +3,7 @@ package com.recorder.core.llm.local
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import com.recorder.core.storage.Diagnostics
 import com.recorder.core.llm.BuildConfig
 import java.io.Closeable
 import java.io.File
@@ -95,7 +96,7 @@ object LocalModelRuntime {
     suspend fun load(context: Context, model: LocalModelSpec, contextSize: Int = 4096): LocalLlm? =
         lock.withLock {
             if (!available) {
-                Log.i(TAG, "llama.cpp runtime not bundled; skipping ${model.fileName}")
+                Diagnostics.i(TAG, "llama.cpp runtime not bundled; skipping ${model.fileName}")
                 return@withLock null
             }
             resident?.let { existing ->
@@ -109,7 +110,7 @@ object LocalModelRuntime {
                     .getDeclaredConstructor()
                     .newInstance() as LocalLlmPlugin
                 plugin.load(context, model.path, contextSize)
-            }.onFailure { Log.w(TAG, "failed to load ${model.fileName}", it) }
+            }.onFailure { Diagnostics.w(TAG, "failed to load ${model.fileName}", it) }
                 .getOrNull()
                 ?.also {
                     resident = it

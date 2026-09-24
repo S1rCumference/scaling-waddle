@@ -2,7 +2,6 @@ package com.recorder.app.work
 
 import android.app.ActivityManager
 import android.content.Context
-import android.util.Log
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -16,6 +15,7 @@ import com.recorder.app.service.RecordingService
 import com.recorder.app.service.ResumeAction
 import com.recorder.app.service.ResumeDecision
 import com.recorder.app.service.ResumeNotifier
+import com.recorder.core.storage.Diagnostics
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.first
 
@@ -46,15 +46,15 @@ class RecordingWatchdog(
             ResumeAction.NOTHING -> Unit
 
             ResumeAction.START_DIRECTLY -> {
-                Log.i(TAG, "recording had stopped; restarting as device owner")
+                Diagnostics.i(TAG, "recording had stopped; restarting as device owner")
                 RecordingService.start(context).onFailure { error ->
-                    Log.w(TAG, "device owner start refused", error)
+                    Diagnostics.w(TAG, "device owner start refused", error)
                     ResumeNotifier.show(context, context.getString(R.string.resume_reason_stopped))
                 }
             }
 
             ResumeAction.ASK_WITH_NOTIFICATION -> {
-                Log.i(TAG, "recording had stopped; asking for a tap")
+                Diagnostics.i(TAG, "recording had stopped; asking for a tap")
                 ResumeNotifier.show(context, context.getString(R.string.resume_reason_stopped))
             }
         }

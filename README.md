@@ -166,6 +166,24 @@ Auto transition. Failing that, open *Recorder Cover* from the cover screen's app
 Re-open setup and tap Try again — partial downloads resume rather than restarting. If it
 fails immediately, check free space: the wizard needs the file size plus headroom.
 
+**2.1 says no models are installed, even though the stable app already has them.**
+Expected, not a bug: Android gives every application id — and `.v21` is a different one — its
+own private storage, with nothing shared between them. 2.1 needs its own copy. The Models step
+says this when it detects the other app installed.
+
+**Recording did not start, or a "stop the other Recorder" message appeared.**
+Fixed in 2.1: it used to guess whether the sibling app had the microphone from a system list
+that Android anonymizes for a normal app, which misfired on any unrelated microphone use (an
+assistant hotword, in particular) and could block recording behind a dialog with no way back
+to actually starting it. It no longer guesses. If the microphone truly is taken by something
+else, the *silencing* banner says so — that signal is this app's own capture actually going
+quiet, not a guess, so it does not misfire the same way.
+
+**Something needs debugging and there is no computer to plug into.**
+Settings → *Diagnostics*. It is a running record of the things that used to be invisible
+without logcat — recording starting or refusing to, a model failing to load or download,
+corrections that could not run — kept on the phone, with Copy and Share buttons.
+
 **The assistant says it is unavailable.**
 Settings → *This device* gives the reason: no model installed, not enough free memory right
 now, or Android older than 11.
