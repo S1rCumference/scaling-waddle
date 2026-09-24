@@ -85,6 +85,13 @@ jobs:
           fi
           echo "OK: both runtimes present, arm64 only"
 
+      # Separate from the list above on purpose: that one asks "is the library in the APK",
+      # this one asks "will it work once installed". llama.cpp loads its CPU kernels by
+      # scanning the on-disk native library directory, so an APK that never extracts them
+      # passes every check above and then fails to load every single model.
+      - name: Verify the APK can run the local models
+        run: ./scripts/ci/verify_apk.sh "$(ls app/build/outputs/apk/razr/debug/*.apk | head -1)"
+
       - name: Upload razr APK
         uses: actions/upload-artifact@v4
         with:
@@ -123,10 +130,20 @@ jobs:
         run: ./gradlew --no-daemon test
 
   release:
-    # Only tagged pushes publish. Signing needs no configuration: the keystore is committed
-    # at signing/recorder.keystore with a known password, so any checkout of this repo builds
-    # an APK that installs over the top of the previous one. See README, "Signing".
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Publishes on a tag, and on every push to the development branch.
+    #
+    # The branch case is what gets updates onto the phone without anyone tagging by hand or
+    # reinstalling: the version comes from recorder.versionName in gradle.properties, this
+    # job creates the matching tag and release itself, and the app's own update check finds
+    # it. Bump that property in the same commit as a change and the phone offers the update;
+    # leave it alone and this step no-ops, because the tag already exists.
+    #
+    # Signing needs no configuration: the keystore is committed at signing/recorder.keystore
+    # with a known password, so any checkout of this repo builds an APK that installs over
+    # the top of the previous one. See README, "Signing".
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.ref == 'refs/heads/claude/local-business-recorder-plan-h7jcb0'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -161,14 +178,32 @@ jobs:
       - name: Fetch native runtimes
         run: ./scripts/ci/prepare_natives.sh
 
-      - name: Derive version from tag
+      - name: Derive the version
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            TAG="${GITHUB_REF_NAME#v}"
+          else
+            TAG="$(grep '^recorder.versionName=' gradle.properties | cut -d= -f2)"
+            test -n "$TAG" || { echo "::error::recorder.versionName is missing"; exit 1; }
+          fi
           echo "name=$TAG" >> "$GITHUB_OUTPUT"
           # versionCode must increase monotonically: major*10000 + minor*100 + patch.
           IFS='.' read -r MAJ MIN PAT <<< "${TAG%%-*}"
           echo "code=$(( ${MAJ:-0} * 10000 + ${MIN:-0} * 100 + ${PAT:-0} ))" >> "$GITHUB_OUTPUT"
+
+          # An existing release for this version is left exactly as it is. Re-publishing
+          # would swap the APK behind a version the phone has already installed, so two
+          # different builds would call themselves the same thing and the update check
+          # would never offer the second one.
+          if gh release view "v$TAG" >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::v$TAG already exists. Bump recorder.versionName to publish an update."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build signed release APKs
         env:
@@ -189,6 +224,10 @@ jobs:
           cd dist && sha256sum *.apk > SHA256SUMS && cat SHA256SUMS
           echo "prefix=$PREFIX" >> "$GITHUB_OUTPUT"
 
+      - name: Verify the APKs can run the local models
+        run: |
+          for apk in dist/*.apk; do ./scripts/ci/verify_apk.sh "$apk"; done
+
       - name: Verify the APKs are actually signed
         run: |
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)"
@@ -198,8 +237,13 @@ jobs:
           done
 
       - name: Publish release
+        if: steps.version.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          # Named explicitly so a branch push publishes v<recorder.versionName>, creating
+          # the tag on this commit, rather than waiting for someone to tag it by hand.
+          tag_name: v${{ steps.version.outputs.name }}
+          name: v${{ steps.version.outputs.name }}
           files: |
             dist/${{ steps.assets.outputs.prefix }}-razr-release.apk
             dist/${{ steps.assets.outputs.prefix }}-standard-release.apk
