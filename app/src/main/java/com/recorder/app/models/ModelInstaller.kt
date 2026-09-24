@@ -4,11 +4,11 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.StatFs
-import android.util.Log
 import com.recorder.core.storage.Diagnostics
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -16,29 +16,16 @@ import okhttp3.Request
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 
-/** Progress of one model install, for the wizard to render. */
-sealed interface InstallProgress {
-    data object Pending : InstallProgress
-    data class Downloading(val bytes: Long, val total: Long) : InstallProgress {
-        val fraction: Float get() = if (total > 0) (bytes.toFloat() / total).coerceIn(0f, 1f) else 0f
-    }
-
-    data object Verifying : InstallProgress
-    data object Extracting : InstallProgress
-    data object Done : InstallProgress
-    data class Failed(val reason: String, val retryable: Boolean) : InstallProgress
-}
-
 /**
  * Downloads models onto the phone, once, over Wi-Fi.
  *
- * Deliberately not WorkManager: the wizard is in the foreground watching progress, and a
- * half-gigabyte download that silently resumes days later in the background is worse
- * behaviour than one the user can see and retry.
+ * Called from [ModelDownloadService] rather than from a ViewModel: several gigabytes over
+ * phone Wi-Fi takes long enough that the screen will turn off and the wizard will be
+ * backgrounded part-way through, and work owned by a screen dies with it.
  *
  * Partial downloads are kept as `.part` files and resumed with a Range request, because
  * 460 MB over phone Wi-Fi does fail, and starting from zero each time is how people give
- * up on setup.
+ * up on setup. A `.part` that cannot be resumed is discarded rather than retried forever.
  */
 class ModelInstaller(private val context: Context) {
 
@@ -73,6 +60,21 @@ class ModelInstaller(private val context: Context) {
     fun requiredBytes(entries: List<ModelEntry>): Long =
         entries.sumOf { if (it.archive != null) it.sizeBytes * 3 else it.sizeBytes } + SLACK_BYTES
 
+    /**
+     * Whether a whole queue fits, checked before the first byte is fetched. The per-model
+     * check alone passed happily for each of four models and then ran the phone out of space
+     * on the last one, which looked like a mysterious failure rather than a full disk.
+     */
+    fun spaceProblem(entries: List<ModelEntry>): String? {
+        val pending = entries.filterNot { it.isInstalled(context) }
+        if (pending.isEmpty()) return null
+        val needed = requiredBytes(pending)
+        val free = freeBytes()
+        if (free >= needed) return null
+        return "Not enough free storage for ${pending.size} model(s): " +
+            "needs about ${needed / (1024 * 1024)} MB, ${free / (1024 * 1024)} MB free."
+    }
+
     suspend fun install(
         entry: ModelEntry,
         allowMetered: Boolean = false,
@@ -99,7 +101,7 @@ class ModelInstaller(private val context: Context) {
             }
 
             val dir = entry.destinationDir(context).apply { mkdirs() }
-            val part = File(dir, "${entry.fileName}.part")
+            val part = entry.partFile(context)
 
             download(entry, part, onProgress)
 
@@ -123,8 +125,27 @@ class ModelInstaller(private val context: Context) {
                 }
             }
 
+            // The last thing checked is the thing that actually matters: that the file is
+            // now where the model selector will look for it. Everything upstream can appear
+            // to succeed — a rename that silently fails, an archive that unpacks the wrong
+            // members — and the old code reported Done regardless, which is how a download
+            // could "finish" and leave the model reported as not installed with no error.
+            if (!entry.isInstalled(context)) {
+                return@withContext fail(
+                    onProgress,
+                    "Downloaded, but the file is not where it should be " +
+                        "(${entry.destinationDir(context).absolutePath}/${entry.fileName}). " +
+                        "Try again; if it repeats, remove the model and re-download.",
+                    retryable = true,
+                )
+            }
+
             onProgress(InstallProgress.Done)
             Result.success(Unit)
+        } catch (cancelled: CancellationException) {
+            // Stopping is not a failure, and swallowing this would break cancellation.
+            onProgress(InstallProgress.Idle)
+            throw cancelled
         } catch (io: IOException) {
             Diagnostics.w(TAG, "model download failed for ${entry.id}", io)
             fail(onProgress, io.message ?: "Download failed.", retryable = true)
@@ -135,6 +156,18 @@ class ModelInstaller(private val context: Context) {
     }
 
     private fun download(entry: ModelEntry, part: File, onProgress: (InstallProgress) -> Unit) {
+        // A .part at or beyond the expected size is not resumable: the server answers a Range
+        // request past the end with 416, which used to fail every retry identically and leave
+        // the model permanently stuck. Start it again instead.
+        if (part.isFile && entry.sizeBytes > 0 && part.length() > entry.sizeBytes) {
+            Diagnostics.w(
+                TAG,
+                "discarding oversized partial download for ${entry.id} " +
+                    "(${part.length()} bytes, expected ${entry.sizeBytes})",
+            )
+            part.delete()
+        }
+
         val already = if (part.isFile) part.length() else 0L
         if (already > 0 && already == entry.sizeBytes) {
             onProgress(InstallProgress.Downloading(already, entry.sizeBytes))
@@ -147,6 +180,11 @@ class ModelInstaller(private val context: Context) {
             .build()
 
         client.newCall(request).execute().use { response ->
+            if (response.code == 416 && already > 0) {
+                // Range unsatisfiable: whatever is on disk does not match the file any more.
+                part.delete()
+                throw IOException("Resume failed; the partial file was discarded. Try again.")
+            }
             if (!response.isSuccessful) {
                 throw IOException("HTTP ${response.code} from ${entry.url}")
             }
@@ -259,8 +297,8 @@ class ModelInstaller(private val context: Context) {
         }
     }
 
-    private companion object {
-        const val TAG = "ModelInstaller"
+    companion object {
+        private const val TAG = "ModelInstaller"
 
         /** Never fill the last 200 MB of a phone; Android misbehaves when nearly full. */
         const val SLACK_BYTES = 200L * 1024 * 1024

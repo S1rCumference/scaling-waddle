@@ -2,6 +2,9 @@ package com.recorder.core.llm.local
 
 import android.app.ActivityManager
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
 import android.util.Log
 import java.io.File
 
@@ -48,6 +51,18 @@ object DeviceCapabilities {
 
     /** True when the system is already under memory pressure — never load a model into that. */
     fun isLowMemory(context: Context): Boolean = memoryInfo(context).lowMemory
+
+    /**
+     * True while the phone is plugged in. The HIGH tier model is only ever loaded when this
+     * is true: 2.5 GB of weights plus a decode burst is not something to spend battery on.
+     */
+    fun isCharging(context: Context): Boolean = runCatching {
+        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        when (intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1)) {
+            BatteryManager.BATTERY_STATUS_CHARGING, BatteryManager.BATTERY_STATUS_FULL -> true
+            else -> false
+        }
+    }.getOrDefault(false)
 
     /**
      * Rounds a measured size to the nearest size phones are sold as.

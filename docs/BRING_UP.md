@@ -44,7 +44,8 @@ Expected: both rows show ✓, and a "Recorder / Listening" notification appears.
 
 1. **Next** to the models step.
 2. It should preselect **Parakeet TDT** (required), **Silero VAD** (required) and
-   **Phi-4-mini** for chat. Untick Phi-4-mini for now if you want a faster first run.
+   **Qwen 3 1.7B** (all day) and **Qwen 3 4B** (charging only). Untick Qwen 3 4B for a
+   faster first run; it is 2.5 GB and only used while plugged in.
 3. **Download**.
 
 Expected: progress per model, then "Installed" on each. About 460 MB for the required two.
@@ -145,8 +146,8 @@ Fill the README table from it. The numbers that matter most:
 ## 9. Benchmark
 
 Settings → **Run benchmark**. Fill the README table. Then, if you want the bigger model on this
-12 GB phone: install Qwen 3 8B from the models step and run it again. If it loads and generates
-without being killed, the 12 GB heavy tier can be moved from the 4B to the 8B.
+12 GB phone, check the charging-only model: plug the phone in, then Settings → Run benchmark
+again. It should pick Qwen 3 4B while charging and the 1.7B on battery.
 
 ## 10. Lockdown (optional, device owner only)
 

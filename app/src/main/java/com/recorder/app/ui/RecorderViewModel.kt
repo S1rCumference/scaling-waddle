@@ -35,6 +35,11 @@ import android.content.Intent
 import com.recorder.app.correction.CorrectionRunner
 import com.recorder.app.export.ExportTarget
 import com.recorder.app.export.Exporter
+import com.recorder.app.models.InstallProgress
+import com.recorder.app.models.ModelCatalog
+import com.recorder.app.models.ModelDownloadService
+import com.recorder.app.models.ModelEntry
+import com.recorder.app.models.ModelInstallStore
 import com.recorder.app.service.MicConflict
 import com.recorder.core.llm.GroupAssistant
 import com.recorder.core.llm.ScopedLine
@@ -374,15 +379,22 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     fun installedModels(): List<Pair<String, String>> =
         LocalModelSelector(getApplication()).allCandidates().filter { it.exists }.map { it.fileName to it.label }
 
-    /** What each model role would use right now, in words. */
-    fun modelSummary(): String {
-        val context = getApplication<Application>()
-        val selector = LocalModelSelector(context)
-        val strongest = selector.selectStrongest()?.label ?: "none fits right now"
-        val small = selector.selectSmallModel()?.label ?: "none fits right now"
-        return "Strongest local model that fits now: $strongest\n" +
-            "Chat model that fits now: $small\n" +
-            "RAM tier: ${DeviceCapabilities.ramTier(context)} (${DeviceCapabilities.marketedRamGb(context)} GB)"
+    /** The tier this phone is on and what each role would use right now, in words. */
+    fun modelSummary(): String = LocalModelSelector(getApplication()).tierSummary()
+
+    /** Per-model download state, so Settings shows the same truth as the wizard. */
+    val modelStates: StateFlow<Map<String, InstallProgress>> = ModelInstallStore.states
+
+    /** Every catalogue entry, for the Settings model list. */
+    fun catalogue(): List<ModelEntry> =
+        runCatching { ModelCatalog.load(getApplication()) }.getOrDefault(emptyList())
+
+    fun isModelInstalled(entry: ModelEntry): Boolean = entry.isInstalled(getApplication())
+
+    /** Queues a model from Settings, using the same service the wizard uses. */
+    fun downloadModel(id: String) {
+        ModelDownloadService.start(getApplication(), listOf(id))
+        _status.value = "Queued. Progress is in the notification and in Settings → Models."
     }
 
     fun correctNow() = viewModelScope.launch {
@@ -526,8 +538,23 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
             val selector = LocalModelSelector(context)
             val spec = selector.selectSmallModel() ?: selector.selectHeavyModel()
 
+            // "Not installed" used to be claimed whenever the selector declined, including
+            // when the file was present and the real reason was free memory or no charger.
+            val installedNow = selector.allCandidates().filter { it.exists }
             _benchmark.value = when {
-                spec == null -> "No local model is installed, so there is nothing to measure."
+                spec == null && installedNow.isEmpty() ->
+                    "No local model is downloaded yet. Settings → Models → Download."
+
+                spec == null -> buildString {
+                    append("Installed, but not loadable right now: ")
+                    append(installedNow.joinToString(", ") { it.label })
+                    append(".\n\n")
+                    append(selector.heavyUnavailableReason() ?: "")
+                    append("\nFree memory: ")
+                    append(DeviceCapabilities.availableRamMb(context))
+                    append(" MB. The charging-only model needs a charger; the all-day model ")
+                    append("needs enough free memory beside the recorder.")
+                }
                 else -> {
                     val model = Runtime.load(context, spec)
                     when (model) {

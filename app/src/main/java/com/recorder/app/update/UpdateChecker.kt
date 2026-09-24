@@ -161,7 +161,7 @@ class UpdateChecker(private val context: Context) {
 
     /** The razr build and the standard build are separate assets and separate app ids. */
     private fun apkAssetName(): String =
-        "${BuildConfig.RELEASE_ASSET_PREFIX}-${if (BuildConfig.COVER_UI_ENABLED) "razr" else "standard"}.apk"
+        "${BuildConfig.RELEASE_ASSET_PREFIX}-${if (BuildConfig.COVER_UI_ENABLED) "razr" else "standard"}-release.apk"
 
     private fun File.sha256(): String {
         val digest = MessageDigest.getInstance("SHA-256")

@@ -53,10 +53,9 @@ device-owner QR path on a factory-reset phone, also on the install page. It is o
 
 ## What it does (2.1)
 
-2.1 installs **beside** the stable app (`com.recorder.app.v21`, "Recorder 2.1", amber icon).
-Only one of the two can hold the microphone — Android silently feeds the other one silence —
-so 2.1 refuses to start while the other is recording, and shows a banner if it is ever
-silenced.
+One app. 2.1 is an upgrade of the same app — same package id, same signing key — so it
+installs over the top of an existing Recorder and keeps your transcripts and downloaded
+models. One icon on the home screen; the cover screen is not a separate app.
 
 One app on both screens. The cover and inner screens draw the same UI over the same shared
 state, so folding keeps your tab, open group, scroll position and Ask conversation. The
@@ -67,17 +66,36 @@ layout is chosen by window size, never by the hinge, and recording never hears a
   original, corrected, or both side by side; exports; and has an Ask box scoped to it with
   Summarise, Action items, Find mentions, Draft follow-up and Re-correct.
 - **Flags** — trigger-phrase hits, lines flagged from answers, and drafts awaiting approval.
-- **Settings** — models (a switcher per role), cloud AI, correction schedule, flag phrases,
-  export defaults, battery and setup status, updates, and *What the AI can do*.
+- **Settings** — models and tiers, cloud AI, correction schedule, flag phrases, export
+  defaults, battery and setup status, updates, diagnostics, and *What the AI can do*.
 
-**Correction.** After transcription, the strongest local model that fits beside recording
-re-reads new lines with their context and fixes misheard words ("go through my contacts" →
-"content"). Batches run every 15 minutes on battery and 3 while charging (both settable),
-wait for a pause in speech, and skip below 20% battery. Overnight, while charging and idle,
-each day is re-corrected in full with the day's recurring names and terms as context.
-Corrections are stored beside the original, append-only, labelled with the pass and the
-model; the original is never changed. The cloud can be picked as the correction engine,
-but is only used while the heavy tier is switched on.
+### Models: three tiers, nothing above 12 GB
+
+| Tier | Phone | Model | When it runs |
+|---|---|---|---|
+| LOW | 6–8 GB | Gemma 3 1B Q4 (0.81 GB) | all day |
+| MEDIUM | 12 GB | Qwen 3 1.7B Q4 (1.11 GB) | all day — the default on this Razr+ |
+| HIGH | 12 GB | Qwen 3 4B Q4 (2.50 GB) | only while plugged in and idle |
+
+MEDIUM is deliberately not the largest model a 12 GB phone can hold. It is loaded and
+unloaded every few minutes by the correction pass, so what matters is that 1.11 GB
+memory-maps in about a second and leaves the recorder's working set alone — not its
+benchmark score. Phi-4-mini and Qwen 3 8B were dropped: the first is the same size as the
+HIGH model while being weaker in that role and far too heavy to hold all day, and the second
+needs 5 GB of weights, which does not load reliably beside the recorder on 12 GB. Tier and
+per-role model are shown and switchable in Settings → Models.
+
+**Correction.** After transcription, the model for this tier re-reads new lines with their
+context and fixes misheard words ("go through my contacts" → "content"). Batches run every
+15 minutes on battery and 3 while charging (both settable), wait for a pause in speech, and
+skip below 20% battery. Overnight, while charging and idle, each day is re-corrected in full
+with the day's recurring names and terms as context. Corrections are stored beside the
+original, append-only, labelled with the pass and the model; the original is never changed.
+
+**Downloads** run in a foreground service with a progress notification, so several gigabytes
+survive the screen turning off and the app being closed. Each model shows its own state —
+waiting, downloading with a percentage, checking, unpacking, installed, or failed with the
+reason and a Try again button.
 
 **Export** a group, a day, a date range, or long-pressed lines; original, corrected or
 both; Markdown with timestamps or plain text; to the share sheet or `Download/Recorder/`.
@@ -106,15 +124,15 @@ running, then read Settings → **Power report**.
 Procedure: install a model in the wizard, then Settings → **Run benchmark**. It loads the
 model, runs the llama.cpp benchmark, and unloads.
 
-| Model | Size | Load time | Prompt tok/s | Gen tok/s | Peak RSS |
-|---|---|---|---|---|---|
-| Qwen 3 1.7B Q4_K_M | 1.03 GB | | | | |
-| Phi-4-mini Q4_K_M | 2.32 GB | | | | |
-| Qwen 3 4B Q4_K_M | 2.33 GB | | | | |
-| Qwen 3 8B Q4_K_M | 4.68 GB | | | | |
+| Tier | Model | Size | Load time | Prompt tok/s | Gen tok/s | Peak RSS |
+|---|---|---|---|---|---|---|
+| LOW | Gemma 3 1B Q4_K_M | 0.81 GB | | | | |
+| MEDIUM | Qwen 3 1.7B Q4_K_M | 1.11 GB | | | | |
+| HIGH | Qwen 3 4B Q4_K_M | 2.50 GB | | | | |
 
-The open question worth answering first: **can this 12 GB phone hold the 8B instead of the
-4B** with the ASR pipeline resident? The tier table assumes not.
+The question worth answering first, since the tier choice rests on it: **does the MEDIUM
+model stay loadable all day** with the recorder resident — load time and peak RSS measured
+after several hours of recording, not from a cold start.
 
 ## How it fits together
 
@@ -166,10 +184,13 @@ Auto transition. Failing that, open *Recorder Cover* from the cover screen's app
 Re-open setup and tap Try again — partial downloads resume rather than restarting. If it
 fails immediately, check free space: the wizard needs the file size plus headroom.
 
-**2.1 says no models are installed, even though the stable app already has them.**
-Expected, not a bug: Android gives every application id — and `.v21` is a different one — its
-own private storage, with nothing shared between them. 2.1 needs its own copy. The Models step
-says this when it detects the other app installed.
+**A model downloaded and then showed as not installed.**
+Fixed in 2.1. Three separate causes: the download ran in the setup screen's own scope, so
+closing the wizard or letting the screen turn off killed it silently (it now runs in a
+foreground service with a notification); the wizard reloaded its list after downloading,
+which overwrote the failure reason with a blank "pending" state; and an in-progress `.part`
+file living in the speech model's own directory made a half-downloaded model report itself
+installed. Every model now shows its own state and its own failure reason.
 
 **Recording did not start, or a "stop the other Recorder" message appeared.**
 Fixed in 2.1: it used to guess whether the sibling app had the microphone from a system list

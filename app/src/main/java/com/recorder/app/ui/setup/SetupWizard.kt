@@ -254,6 +254,18 @@ private fun ModelsStep(viewModel: SetupViewModel) {
             "${free / (1024 * 1024)} MB free on this phone.",
     )
 
+    val failed = models.count { it.progress is InstallProgress.Failed }
+    if (failed > 0) {
+        Body(
+            "$failed download(s) failed. Each one says why above, with a Try again button " +
+                "where retrying can help. Downloading continues if you leave this screen.",
+        )
+    }
+    viewModel.message.collectAsState().value?.let { message ->
+        Body(message)
+        TextButton(onClick = viewModel::clearMessage) { Text("Dismiss") }
+    }
+
     Row {
         Button(onClick = viewModel::startInstall, enabled = !installing && pending > 0) {
             Text(if (installing) "Downloading…" else "Download")
@@ -261,17 +273,35 @@ private fun ModelsStep(viewModel: SetupViewModel) {
         if (installing) {
             TextButton(onClick = viewModel::cancelInstall) { Text("Stop") }
         }
+        if (!installing && failed > 0) {
+            TextButton(onClick = viewModel::retryFailed) { Text("Retry all failed") }
+        }
+    }
+    if (installing) {
+        Body(
+            "This keeps going with the screen off and the app closed — there is a notification " +
+                "with the progress.",
+        )
     }
 }
 
 @Composable
 private fun ProgressLine(progress: InstallProgress, onRetry: () -> Unit) {
     when (progress) {
-        is InstallProgress.Pending -> Unit
+        // Nothing claimed for a model nothing is happening to. Showing a stalled progress bar
+        // for a download that is not running was half of why failures looked like silence.
+        is InstallProgress.Idle -> Unit
+
+        is InstallProgress.Queued -> Text(
+            "Waiting its turn…",
+            style = MaterialTheme.typography.labelSmall,
+        )
+
         is InstallProgress.Downloading -> Column(Modifier.padding(top = 6.dp)) {
             LinearProgressIndicator(progress = { progress.fraction }, modifier = Modifier.fillMaxWidth())
             Text(
-                "${progress.bytes / (1024 * 1024)} / ${progress.total / (1024 * 1024)} MB",
+                "${progress.percent}% · ${progress.bytes / (1024 * 1024)} of " +
+                    "${progress.total / (1024 * 1024)} MB",
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -282,11 +312,22 @@ private fun ProgressLine(progress: InstallProgress, onRetry: () -> Unit) {
         }
 
         is InstallProgress.Extracting -> Text("Unpacking…", style = MaterialTheme.typography.labelSmall)
-        is InstallProgress.Done -> Text("Installed", style = MaterialTheme.typography.labelSmall)
-        is InstallProgress.Failed -> Column {
-            Text(progress.reason, style = MaterialTheme.typography.labelSmall)
+        is InstallProgress.Done -> Text("✓ Installed", style = MaterialTheme.typography.labelSmall)
+
+        is InstallProgress.Failed -> Column(Modifier.padding(top = 4.dp)) {
+            Text(
+                "Failed: ${progress.reason}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+            )
             if (progress.retryable) {
                 TextButton(onClick = onRetry) { Text("Try again") }
+            } else {
+                Text(
+                    "This one will not fix itself by retrying — free up space or change the " +
+                        "setting it mentions first.",
+                    style = MaterialTheme.typography.labelSmall,
+                )
             }
         }
     }

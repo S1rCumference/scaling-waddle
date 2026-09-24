@@ -25,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.Alignment
+import com.recorder.app.models.InstallProgress
 import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
 import com.recorder.core.storage.ModelChoice
@@ -429,22 +430,42 @@ private fun ModelsSection(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
     val correctionEngine by viewModel.correctionEngine.collectAsState()
     val askModel by viewModel.askModel.collectAsState()
     val heavyEnabled by viewModel.heavyTierEnabled.collectAsState()
+    val downloadStates by viewModel.modelStates.collectAsState()
+    val catalogue = remember { viewModel.catalogue() }
     val installed = remember { viewModel.installedModels() }
 
-    Text(viewModel.modelSummary(), style = MaterialTheme.typography.bodySmall)
     Text(
-        "Speech recognition: Parakeet TDT, on this phone. It is the only speech model this build " +
-            "supports, so there is nothing to switch.",
+        "Three tiers, and nothing that needs more than a 12 GB phone.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Text(
+            viewModel.modelSummary(),
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(12.dp),
+        )
+    }
+    Text(
+        "LOW (6–8 GB) uses Gemma 3 1B all day. MEDIUM (12 GB) uses Qwen 3 1.7B all day — " +
+            "chosen to run beside the recorder for a whole day rather than to win a benchmark. " +
+            "HIGH (12 GB) uses Qwen 3 4B and only ever runs while the phone is plugged in.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Text(
+        "Speech recognition is Parakeet TDT, the only speech model this build supports, so " +
+            "there is nothing to switch there.",
         style = MaterialTheme.typography.bodySmall,
         modifier = Modifier.padding(top = 6.dp),
     )
 
+    // --- per-role switchers -------------------------------------------------------------
     val localOptions = installed.map { (file, label) -> label to file }
     val cloudNote = if (heavyEnabled) "Cloud" else "Cloud (switch on Cloud AI first)"
 
     Choice(
         "Correction model",
-        listOf("Strongest that fits (auto)" to ModelChoice.AUTO) + localOptions + listOf(cloudNote to ModelChoice.CLOUD),
+        listOf("Best that fits (auto)" to ModelChoice.AUTO) + localOptions +
+            listOf(cloudNote to ModelChoice.CLOUD),
         if (correctionEngine == ModelChoice.CLOUD) ModelChoice.CLOUD else correctionModel,
     ) { choice ->
         if (choice == ModelChoice.CLOUD) {
@@ -456,19 +477,59 @@ private fun ModelsSection(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
     }
     Choice(
         "Ask model (questions, summaries, drafts)",
-        listOf("Chat model that fits (auto)" to ModelChoice.AUTO) + localOptions + listOf(cloudNote to ModelChoice.CLOUD),
+        listOf("All-day model (auto)" to ModelChoice.AUTO) + localOptions +
+            listOf(cloudNote to ModelChoice.CLOUD),
         askModel,
     ) { viewModel.setAskModel(it) }
     Text(
-        "Heavy tier (the overnight folder filing and email drafts) uses the provider under Cloud AI. " +
-            "Cloud choices only take effect while Cloud AI is switched on; until then the phone's own " +
-            "model is used.",
+        "\"Auto\" uses the charging-only model when the phone is plugged in and the all-day " +
+            "model otherwise. Cloud choices only take effect while Cloud AI is switched on.",
         style = MaterialTheme.typography.bodySmall,
     )
-    if (installed.isEmpty()) {
-        Text("No local AI model is installed yet.", style = MaterialTheme.typography.bodySmall)
+
+    // --- what is actually on disk -------------------------------------------------------
+    Text(
+        "Downloads",
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier.padding(top = 10.dp),
+    )
+    if (catalogue.isEmpty()) {
+        Text("Could not read the model list.", style = MaterialTheme.typography.bodySmall)
     }
-    Button(onClick = onRunSetup) { Text("Download or remove models") }
+    catalogue.forEach { entry ->
+        val isInstalled = viewModel.isModelInstalled(entry)
+        val state = downloadStates[entry.id]
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(entry.displayName, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "${entry.approxMb} MB · " + when {
+                        isInstalled -> "installed"
+                        state is InstallProgress.Downloading -> "downloading ${state.percent}%"
+                        state is InstallProgress.Queued -> "waiting its turn"
+                        state is InstallProgress.Verifying -> "checking the download"
+                        state is InstallProgress.Extracting -> "unpacking"
+                        state is InstallProgress.Failed -> "failed: ${state.reason}"
+                        else -> "not downloaded"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (state is InstallProgress.Failed) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (!isInstalled && state !is InstallProgress.Downloading && state !is InstallProgress.Queued) {
+                TextButton(onClick = { viewModel.downloadModel(entry.id) }) {
+                    Text(if (state is InstallProgress.Failed) "Retry" else "Download")
+                }
+            }
+        }
+    }
+    Button(onClick = onRunSetup, modifier = Modifier.padding(top = 6.dp)) {
+        Text("Open the models step")
+    }
 }
 
 @Composable

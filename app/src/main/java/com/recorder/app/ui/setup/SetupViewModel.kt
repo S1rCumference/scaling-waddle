@@ -6,17 +6,20 @@ import androidx.lifecycle.viewModelScope
 import com.recorder.app.ServiceLocator
 import com.recorder.app.models.InstallProgress
 import com.recorder.app.models.ModelCatalog
+import com.recorder.app.models.ModelDownloadService
 import com.recorder.app.models.ModelEntry
+import com.recorder.app.models.ModelInstallStore
 import com.recorder.app.models.ModelInstaller
 import com.recorder.app.models.ModelRole
 import com.recorder.core.asr.AsrEngineFactory
 import com.recorder.core.llm.local.DeviceCapabilities
 import com.recorder.core.llm.local.LocalModelRuntime
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -37,16 +40,39 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
     private val _step = MutableStateFlow(SetupStep.WELCOME)
     val step: StateFlow<SetupStep> = _step.asStateFlow()
 
-    private val _models = MutableStateFlow<List<ModelUiState>>(emptyList())
-    val models: StateFlow<List<ModelUiState>> = _models.asStateFlow()
+    /** The catalogue plus what the user has ticked. Progress comes from [ModelInstallStore]. */
+    private data class Plan(val entry: ModelEntry, val selected: Boolean)
 
-    private val _installing = MutableStateFlow(false)
-    val installing: StateFlow<Boolean> = _installing.asStateFlow()
+    private val _plan = MutableStateFlow<List<Plan>>(emptyList())
+
+    /**
+     * What the models step renders. Install state is read from the store rather than held
+     * here: it used to be kept in this ViewModel and then overwritten by [reload], which
+     * threw away the reason a download had failed and left the model looking merely
+     * un-ticked. Now a failure stays visible until it is retried or succeeds.
+     */
+    val models: StateFlow<List<ModelUiState>> =
+        combine(_plan, ModelInstallStore.states) { plan, states ->
+            val context = getApplication<Application>()
+            plan.map { (entry, selected) ->
+                val installed = entry.isInstalled(context)
+                ModelUiState(
+                    entry = entry,
+                    selected = selected,
+                    installed = installed,
+                    progress = when {
+                        installed -> InstallProgress.Done
+                        else -> states[entry.id] ?: InstallProgress.Idle
+                    },
+                )
+            }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** True while the download service is working, wherever it was started from. */
+    val installing: StateFlow<Boolean> = ModelInstallStore.running
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
-
-    private var installJob: Job? = null
 
     val ramTier = DeviceCapabilities.ramTier(application)
     val ramGb = DeviceCapabilities.totalRamGb(application)
@@ -55,6 +81,10 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
         reload()
     }
 
+    /**
+     * Re-reads the catalogue and reconciles the store with what is actually on disk. Safe to
+     * call at any time: it does not touch in-flight or failed states.
+     */
     fun reload() {
         val context = getApplication<Application>()
         val all = runCatching { ModelCatalog.load(context) }
@@ -62,24 +92,21 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
             .getOrDefault(emptyList())
 
         val recommended = ModelCatalog.recommended(all, ramTier).map { it.id }.toSet()
-        _models.value = all.map { entry ->
-            ModelUiState(
-                entry = entry,
-                selected = entry.id in recommended,
-                installed = entry.isInstalled(context),
-                progress = if (entry.isInstalled(context)) InstallProgress.Done else InstallProgress.Pending,
-            )
+        val previous = _plan.value.associate { it.entry.id to it.selected }
+        _plan.value = all.map { entry ->
+            Plan(entry, previous[entry.id] ?: (entry.id in recommended))
         }
+        ModelInstallStore.reconcile(context, all)
     }
 
     fun toggle(id: String) {
-        _models.update { list ->
-            list.map { state ->
+        _plan.update { list ->
+            list.map { plan ->
                 // Required models are not optional; the app produces no text without them.
-                if (state.entry.id == id && !state.entry.required) {
-                    state.copy(selected = !state.selected)
+                if (plan.entry.id == id && !plan.entry.required) {
+                    plan.copy(selected = !plan.selected)
                 } else {
-                    state
+                    plan
                 }
             }
         }
@@ -87,46 +114,59 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Total download size of everything selected and not yet installed. */
     fun pendingBytes(): Long =
-        _models.value.filter { it.selected && !it.installed }.sumOf { it.entry.sizeBytes }
+        models.value.filter { it.selected && !it.installed }.sumOf { it.entry.sizeBytes }
 
     fun freeBytes(): Long = installer.freeBytes()
 
     fun onUnmeteredNetwork(): Boolean = installer.onUnmeteredNetwork()
 
+    /**
+     * Hands the selected models to [ModelDownloadService]. The work deliberately does not run
+     * in this ViewModel's scope: a multi-gigabyte download has to survive the wizard being
+     * closed and the screen turning off, which is exactly what used to kill it.
+     */
     fun startInstall() {
-        if (_installing.value) return
-        _installing.value = true
-        installJob = viewModelScope.launch {
-            val allowMetered = settings.allowMeteredDownloads.first()
-            val queue = _models.value.filter { it.selected && !it.installed }
-
-            for (target in queue) {
-                installer.install(target.entry, allowMetered) { progress ->
-                    _models.update { list ->
-                        list.map { if (it.entry.id == target.entry.id) it.copy(progress = progress) else it }
-                    }
-                }
-            }
-            reload()
-            _installing.value = false
+        val context = getApplication<Application>()
+        val queue = models.value.filter { it.selected && !it.installed }
+        if (queue.isEmpty()) {
+            _message.value = "Everything selected is already installed."
+            return
         }
+        installer.spaceProblem(queue.map { it.entry })?.let { problem ->
+            _message.value = problem
+            return
+        }
+        if (!installer.hasNetwork()) {
+            _message.value = "No network connection. Connect to Wi-Fi and try again."
+            return
+        }
+        ModelDownloadService.start(context, queue.map { it.entry.id })
     }
 
     fun cancelInstall() {
-        installJob?.cancel()
-        _installing.value = false
-        _message.value = "Download stopped. Partly downloaded files are kept and will resume."
+        ModelDownloadService.stop(getApplication())
+        _message.value = "Download stopped. Part-downloaded files are kept and will resume."
     }
 
+    /** Retries one model, and only that one. */
     fun retry(id: String) {
-        _models.update { list ->
-            list.map { if (it.entry.id == id) it.copy(progress = InstallProgress.Pending) else it }
+        ModelDownloadService.start(getApplication(), listOf(id))
+    }
+
+    /** Retries every model whose last attempt failed in a way worth retrying. */
+    fun retryFailed() {
+        val ids = models.value
+            .filter { (it.progress as? InstallProgress.Failed)?.retryable == true }
+            .map { it.entry.id }
+        if (ids.isEmpty()) {
+            _message.value = "Nothing to retry that a retry would fix."
+            return
         }
-        startInstall()
+        ModelDownloadService.start(getApplication(), ids)
     }
 
     fun remove(id: String) = viewModelScope.launch {
-        _models.value.firstOrNull { it.entry.id == id }?.let { installer.uninstall(it.entry) }
+        models.value.firstOrNull { it.entry.id == id }?.let { installer.uninstall(it.entry) }
         reload()
     }
 
@@ -134,7 +174,7 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
 
     /** True when everything required is installed, which is what the wizard gates on. */
     fun requiredInstalled(): Boolean =
-        _models.value.filter { it.entry.required }.all { it.installed }
+        models.value.filter { it.entry.required }.all { it.installed }
 
     fun transcriptionReady(): Boolean {
         val context = getApplication<Application>()
@@ -143,12 +183,12 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
 
     fun localChatReady(): Boolean =
         LocalModelRuntime.available &&
-            _models.value.any { it.entry.role == ModelRole.SMALL_CHAT && it.installed }
+            models.value.any { it.entry.role == ModelRole.SMALL_CHAT && it.installed }
 
     /** Why local chat is unavailable, or null when it is ready. */
     fun localChatBlocker(): String? = when {
         !LocalModelRuntime.available -> LocalModelRuntime.unavailableReason
-        _models.value.none { it.entry.role == ModelRole.SMALL_CHAT } ->
+        models.value.none { it.entry.role == ModelRole.SMALL_CHAT } ->
             "No chat model is listed in this build's catalogue yet"
 
         !localChatReady() -> "No chat model installed"

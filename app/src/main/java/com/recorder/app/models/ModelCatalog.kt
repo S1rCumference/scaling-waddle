@@ -57,17 +57,25 @@ data class ModelEntry(
         ModelRole.SMALL_CHAT, ModelRole.HEAVY -> LocalModelRuntime.modelDir(context)
     }
 
+    /** The in-progress download for this model, which is never evidence of an install. */
+    fun partFile(context: Context): File = File(destinationDir(context), "$fileName.part")
+
     /**
-     * True when this model looks installed. Archives are judged by their directory having
-     * contents, since their inner filenames come from the archive itself.
+     * True when this model is actually usable on disk.
+     *
+     * The archive case used to accept "any non-empty file in the directory", and the
+     * in-progress `.part` download lives in exactly that directory — so a half-downloaded
+     * speech model reported itself installed, the wizard showed a tick, and transcription
+     * produced nothing. An unpacked sherpa model is a set of .onnx files plus tokens.txt, so
+     * that is what gets checked.
      */
     fun isInstalled(context: Context): Boolean {
         val dir = destinationDir(context)
-        return if (archive != null) {
-            dir.listFiles()?.any { it.length() > 0 } == true
-        } else {
-            File(dir, fileName).let { it.isFile && it.length() > 0 }
+        if (archive == null) {
+            return File(dir, fileName).let { it.isFile && it.length() > 0 }
         }
+        val files = dir.listFiles()?.filter { it.isFile && it.length() > 0 }.orEmpty()
+        return files.any { it.name.endsWith(".onnx") } && files.any { it.name == "tokens.txt" }
     }
 }
 
@@ -115,19 +123,27 @@ object ModelCatalog {
         }
     }
 
-    /** Models this phone should install, largest-capable first within each role. */
+    /**
+     * What this phone should install: everything required, plus one model per role.
+     *
+     * The pick per role is the entry for the highest tier this phone qualifies for — not the
+     * largest file. Those happen to coincide today, but the intent is the tier mapping in
+     * models.json, and a future entry that is bigger without being the tier's choice should
+     * not quietly win.
+     */
     fun recommended(all: List<ModelEntry>, tier: RamTier): List<ModelEntry> {
-        val order = listOf(RamTier.LOW_8GB, RamTier.MID_12GB, RamTier.HIGH_16GB_PLUS)
-        fun fits(entry: ModelEntry) = order.indexOf(entry.minRamTier) <= order.indexOf(tier)
+        fun rank(t: RamTier) = TIER_ORDER.indexOf(t)
+        fun fits(entry: ModelEntry) = rank(entry.minRamTier) <= rank(tier)
 
         return buildList {
             addAll(all.filter { it.required && fits(it) })
-            // One chat model per role: the largest this tier can host.
             listOf(ModelRole.SMALL_CHAT, ModelRole.HEAVY).forEach { role ->
                 all.filter { it.role == role && fits(it) && !it.required }
-                    .maxByOrNull { it.sizeBytes }
+                    .maxByOrNull { rank(it.minRamTier) }
                     ?.let(::add)
             }
         }
     }
+
+    private val TIER_ORDER = listOf(RamTier.LOW_8GB, RamTier.MID_12GB, RamTier.HIGH_16GB_PLUS)
 }

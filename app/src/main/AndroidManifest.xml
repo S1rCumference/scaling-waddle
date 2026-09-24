@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Model downloads run in a foreground service so several GB survive the screen going off. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -63,28 +65,41 @@
         </activity>
 
         <!--
-            Launcher-visible so the Razr's cover-screen app list can start it directly,
-            and small-screen friendly so it lays out sanely on the outer display.
+            The cover screen. Deliberately NOT a launcher activity: a second MAIN/LAUNCHER
+            entry puts a second icon on the home screen and in the app list, which looked
+            like two apps. CoverPresenter starts this explicitly on the cover display, which
+            needs only android:exported, and Motorola's "allow on external display / auto
+            transition" setting applies to the app rather than to a particular activity.
+
+            Small-screen friendly so it lays out sanely on the 4.0in outer panel.
         -->
         <activity
             android:name=".ui.CoverActivity"
             android:exported="true"
             android:label="@string/cover_label"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density"
             android:resizeableActivity="true"
             android:showWhenLocked="true"
-            android:turnScreenOn="false">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:turnScreenOn="false" />
 
         <service
             android:name=".service.RecordingService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+
+        <!--
+            Downloads the models. A foreground service rather than work owned by the wizard:
+            3.5 GB over phone Wi-Fi outlives the screen staying on, and a download that dies
+            when the user looks away is the bug this replaced.
+        -->
+        <service
+            android:name=".models.ModelDownloadService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <receiver
             android:name=".service.BootReceiver"

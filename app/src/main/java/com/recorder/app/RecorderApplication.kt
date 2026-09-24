@@ -4,6 +4,7 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import com.recorder.app.correction.EndOfDayWorker
+import com.recorder.app.models.ModelDownloadService
 import com.recorder.app.service.RecordingService
 import com.recorder.app.ui.AppUiState
 import com.recorder.app.service.ResumeNotifier
@@ -48,7 +49,17 @@ class RecorderApplication : Application() {
             description = getString(R.string.resume_channel_description)
         }
 
+        // Low importance: a progress bar, not something to interrupt anyone for.
+        val downloads = NotificationChannel(
+            ModelDownloadService.CHANNEL_ID,
+            getString(R.string.download_channel_name),
+            NotificationManager.IMPORTANCE_LOW,
+        ).apply {
+            description = getString(R.string.download_channel_description)
+            setShowBadge(false)
+        }
+
         getSystemService(NotificationManager::class.java)
-            .createNotificationChannels(listOf(recording, resume))
+            .createNotificationChannels(listOf(recording, resume, downloads))
     }
 }

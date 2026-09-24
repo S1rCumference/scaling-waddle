@@ -12,9 +12,7 @@ manifest that drives it.
 | Parakeet TDT 0.6B v2 INT8 | speech recognition | 460 MB | all | CC-BY-4.0 | yes |
 | Gemma 3 1B Instruct Q4_K_M | small chat | 769 MB | 8 GB+ | Gemma Terms | no |
 | Qwen 3 1.7B Q4_K_M | small chat | 1.03 GB | 8 GB+ | Apache-2.0 | no |
-| Phi-4-mini Instruct Q4_K_M | small chat | 2.32 GB | 12 GB+ | MIT | no |
 | Qwen 3 4B Q4_K_M | heavy | 2.33 GB | 12 GB+ | Apache-2.0 | no |
-| Qwen 3 8B Q4_K_M | heavy | 4.68 GB | 16 GB+ | Apache-2.0 | no |
 
 Every URL and byte size above was checked against the source, not copied from a README:
 
@@ -23,7 +21,6 @@ silero_vad.onnx                   2,327,524  sha256 1a153a22…88e3
 parakeet …v2-int8.tar.bz2       482,468,385  sha256 157c157b…e1ad
 gemma-3-1b-it-Q4_K_M.gguf       806,058,272  size verified, no digest
 Qwen3-1.7B-Q4_K_M.gguf        1,107,409,472  size verified, no digest
-Phi-4-mini-instruct-Q4_K_M.gguf 2,491,874,272  size verified, no digest
 Qwen3-4B-Q4_K_M.gguf          2,497,280,256  size verified, no digest
 Qwen3-8B-Q4_K_M.gguf          5,027,783,488  size verified, no digest
 ```
@@ -55,8 +52,8 @@ threshold used to drop it into the 8 GB tier.
 | Phone | Small chat | Heavy |
 |---|---|---|
 | 8 GB | Qwen 3 1.7B | none — nothing heavy fits beside ASR |
-| 12 GB (this Razr+) | Phi-4-mini | Qwen 3 4B |
-| 16 GB+ | Phi-4-mini | Qwen 3 8B |
+| 12 GB (this Razr+) | Qwen 3 1.7B | Qwen 3 4B (charging only) |
+| 16 GB+ | Qwen 3 1.7B | Qwen 3 4B (charging only) |
 
 Whether a 12 GB phone can actually hold the 8B instead of the 4B is a question for the
 on-device benchmark (Settings → Benchmark), not a guess made here.
@@ -97,7 +94,8 @@ curl -sL "<url>" | sha256sum
 Fields that matter:
 
 - `role` — `vad`, `asr`, `small_chat` or `heavy`. An unknown role is skipped, not fatal.
-- `minRamTier` — the lowest tier allowed to offer it: `LOW_8GB`, `MID_12GB`, `HIGH_16GB_PLUS`.
+- `minRamTier` — the lowest tier allowed to offer it: `LOW_8GB` or `MID_12GB`. Nothing in
+  this build needs more, so a 16 GB phone is offered exactly what a 12 GB one is.
   The wizard preselects the largest model a tier can host.
 - `required` — the user cannot untick it, and setup is not "complete" without it.
 - `archive` — `tar.bz2`, or null. Archives are unpacked into the role's directory, flattened,

@@ -184,8 +184,8 @@ jobs:
           PREFIX="$(grep '^recorder.releaseAssetPrefix=' gradle.properties | cut -d= -f2)"
           test -n "$PREFIX"
           mkdir -p dist
-          cp app/build/outputs/apk/razr/release/*.apk "dist/$PREFIX-razr.apk"
-          cp app/build/outputs/apk/standard/release/*.apk "dist/$PREFIX-standard.apk"
+          cp app/build/outputs/apk/razr/release/*.apk "dist/$PREFIX-razr-release.apk"
+          cp app/build/outputs/apk/standard/release/*.apk "dist/$PREFIX-standard-release.apk"
           cd dist && sha256sum *.apk > SHA256SUMS && cat SHA256SUMS
           echo "prefix=$PREFIX" >> "$GITHUB_OUTPUT"
 
@@ -201,8 +201,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/${{ steps.assets.outputs.prefix }}-razr.apk
-            dist/${{ steps.assets.outputs.prefix }}-standard.apk
+            dist/${{ steps.assets.outputs.prefix }}-razr-release.apk
+            dist/${{ steps.assets.outputs.prefix }}-standard-release.apk
             dist/SHA256SUMS
           generate_release_notes: true
           # Downloads are served from releases/latest/download/<asset>, so the install page

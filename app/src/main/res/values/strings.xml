@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Recorder 2.1</string>
-    <string name="cover_label">Recorder 2.1 Cover</string>
+    <string name="app_name">Recorder</string>
+    <string name="cover_label">Recorder cover screen</string>
     <string name="recording_channel_name">Recording</string>
     <string name="recording_channel_description">Shown while the recorder is listening.</string>
-    <string name="notification_title">Recorder 2.1</string>
+    <string name="notification_title">Recorder</string>
     <string name="notification_starting">Starting…</string>
     <string name="notification_recording">Listening · %1$s VAD · %2$s</string>
     <string name="notification_no_permission">Microphone permission needed</string>
@@ -15,4 +15,7 @@
     <string name="resume_reason_stopped">Recording stopped unexpectedly. Tap to start it again.</string>
     <string name="resume_channel_name">Resume recording</string>
     <string name="resume_channel_description">Shown when recording needs a tap to start.</string>
+    <string name="download_notification_title">Downloading models</string>
+    <string name="download_channel_name">Model downloads</string>
+    <string name="download_channel_description">Progress while speech and AI models download.</string>
 </resources>

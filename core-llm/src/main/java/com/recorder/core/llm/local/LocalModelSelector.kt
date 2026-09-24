@@ -34,35 +34,47 @@ data class LocalModelSpec(
 class LocalModelSelector(private val context: Context) {
 
     /**
-     * The always-available chat model, largest first.
+     * The all-day model for this phone's tier, then smaller fallbacks.
+     *
+     * Three tiers, and nothing that needs more than a 12 GB phone:
+     *
+     *   LOW    (6-8 GB)  Gemma 3 1B, 0.81 GB
+     *   MEDIUM (12 GB)   Qwen 3 1.7B, 1.11 GB   <- the default on this project's Razr+
+     *   HIGH   (12 GB)   Qwen 3 4B, 2.50 GB, charging and idle only ([heavyModelCandidate])
+     *
+     * The MEDIUM choice is deliberately not the biggest model a 12 GB phone can hold. This
+     * one runs all day beside the recorder: it is loaded and unloaded every few minutes by
+     * the correction pass, so what matters is that 1.11 GB memory-maps in about a second and
+     * leaves the ASR pipeline's working set alone, not how it scores on a benchmark. The
+     * bigger model is still there for when the phone is plugged in.
      *
      * Filenames and headroom figures match app/src/main/assets/models.json, whose sizes were
      * read from the Hub rather than estimated. Headroom is roughly the file plus KV cache and
-     * runtime overhead, so a model that would be OOM-killed beside the ASR pipeline is never
+     * runtime overhead, so a model that would be OOM-killed beside the recorder is never
      * chosen.
      */
     fun smallModelCandidates(): List<LocalModelSpec> {
         val dir = LocalModelRuntime.modelDir(context)
-        return listOf(
-            // 2.49 GB on disk; only offered from the 12 GB tier upward.
-            spec("Phi-4-mini Instruct (Q4_K_M)", "phi-4-mini-q4.gguf", 3_400, dir),
-            // 1.11 GB — the sensible default on an 8 GB phone.
-            spec("Qwen 3 1.7B (Q4_K_M)", "qwen3-1.7b-q4.gguf", 1_700, dir),
-            // 0.81 GB — last resort when memory is tight.
-            spec("Gemma 3 1B Instruct (Q4_K_M)", "gemma-3-1b-q4.gguf", 1_300, dir),
-        )
+        val medium = spec("Qwen 3 1.7B (Q4_K_M)", "qwen3-1.7b-q4.gguf", 1_700, dir)
+        val low = spec("Gemma 3 1B Instruct (Q4_K_M)", "gemma-3-1b-q4.gguf", 1_300, dir)
+        return when (DeviceCapabilities.ramTier(context)) {
+            RamTier.LOW_8GB -> listOf(low)
+            // 16 GB phones get the same models: nothing in this build needs more than 12 GB.
+            RamTier.MID_12GB, RamTier.HIGH_16GB_PLUS -> listOf(medium, low)
+        }
     }
 
-    /** The heavy tier, gated on RAM tier rather than only on free memory. */
+    /**
+     * The HIGH tier: the biggest model that loads reliably on a 12 GB phone. Nothing is
+     * offered on 8 GB, and nothing larger is offered at all — 5 GB of weights does not load
+     * beside the recorder on 12 GB, so it is left out rather than offered and then killed.
+     */
     fun heavyModelCandidate(): LocalModelSpec? {
         val dir = LocalModelRuntime.modelDir(context)
         return when (DeviceCapabilities.ramTier(context)) {
-            // Nothing heavy fits beside ASR and a chat model in 8 GB.
             RamTier.LOW_8GB -> null
-            // 2.50 GB. Whether the 8B fits here instead is for the benchmark to answer.
-            RamTier.MID_12GB -> spec("Qwen 3 4B (Q4_K_M)", "qwen3-4b-q4.gguf", 3_400, dir)
-            // 5.03 GB.
-            RamTier.HIGH_16GB_PLUS -> spec("Qwen 3 8B (Q4_K_M)", "qwen3-8b-q4.gguf", 6_600, dir)
+            RamTier.MID_12GB, RamTier.HIGH_16GB_PLUS ->
+                spec("Qwen 3 4B (Q4_K_M)", "qwen3-4b-q4.gguf", 3_400, dir)
         }
     }
 
@@ -81,29 +93,37 @@ class LocalModelSelector(private val context: Context) {
             }
     }
 
+    /**
+     * The HIGH tier model, or null. Requires the phone to be plugged in: this model exists
+     * for overnight work, and loading it on battery is the thing the tiers are meant to stop.
+     */
     fun selectHeavyModel(): LocalModelSpec? {
         if (!LocalModelRuntime.available) return null
+        if (!DeviceCapabilities.isCharging(context)) return null
         val candidate = heavyModelCandidate() ?: return null
         val free = DeviceCapabilities.availableRamMb(context)
         return candidate.takeIf { it.exists && free >= it.requiredFreeMb }
     }
 
     /**
-     * The strongest model this phone can hold beside recording right now: the heavy model if
-     * the RAM tier allows it and there is room, otherwise the best chat model that fits.
+     * The strongest model available right now: the HIGH tier one while charging, otherwise
+     * the all-day model. On battery this is the all-day model by design, not by accident.
      */
     fun selectStrongest(): LocalModelSpec? = selectHeavyModel() ?: selectSmallModel()
 
-    /** Every model this build knows about, in order of strength, for the Settings switchers. */
+    /** Every model this build knows about, strongest first, for the Settings switchers. */
     fun allCandidates(): List<LocalModelSpec> =
         listOfNotNull(heavyModelCandidate()) + smallModelCandidates()
 
-    /** A specific model, if it is installed and fits in memory now. */
+    /**
+     * A specific model chosen in Settings, if it is installed and fits in memory now. The
+     * charging rule still applies to the HIGH tier model however it was chosen.
+     */
     fun selectFile(fileName: String): LocalModelSpec? {
         if (!LocalModelRuntime.available || DeviceCapabilities.isLowMemory(context)) return null
-        val dir = LocalModelRuntime.modelDir(context)
-        val known = (smallModelCandidates() + listOfNotNull(heavyModelCandidate()) + allHeavySpecs(dir))
-            .firstOrNull { it.fileName == fileName } ?: return null
+        val heavy = heavyModelCandidate()
+        if (fileName == heavy?.fileName && !DeviceCapabilities.isCharging(context)) return null
+        val known = allCandidates().firstOrNull { it.fileName == fileName } ?: return null
         val free = DeviceCapabilities.availableRamMb(context)
         return known.takeIf { it.exists && free >= it.requiredFreeMb }
     }
@@ -115,21 +135,40 @@ class LocalModelSelector(private val context: Context) {
         is LocalModelChoice.File -> selectFile(choice.fileName)
     }
 
-    private fun allHeavySpecs(dir: File) = listOf(
-        spec("Qwen 3 4B (Q4_K_M)", "qwen3-4b-q4.gguf", 3_400, dir),
-        spec("Qwen 3 8B (Q4_K_M)", "qwen3-8b-q4.gguf", 6_600, dir),
-    )
+    /** Which tier this phone is on, and what each role would use, for the Settings screen. */
+    fun tierSummary(): String {
+        val tier = when (DeviceCapabilities.ramTier(context)) {
+            RamTier.LOW_8GB -> "LOW (6-8 GB)"
+            RamTier.MID_12GB, RamTier.HIGH_16GB_PLUS -> "MEDIUM / HIGH (12 GB)"
+        }
+        val allDay = smallModelCandidates().firstOrNull()
+        val heavy = heavyModelCandidate()
+        return buildString {
+            append("Tier: ").append(tier).append(" · ")
+            append(DeviceCapabilities.marketedRamGb(context)).append(" GB, ")
+            append(DeviceCapabilities.availableRamMb(context)).append(" MB free now\n")
+            append("All day: ").append(allDay?.label ?: "none").append(' ')
+            append(if (allDay?.exists == true) "· installed" else "· not installed").append('\n')
+            append("Charging only: ").append(heavy?.label ?: "none on this tier")
+            if (heavy != null) {
+                append(if (heavy.exists) " · installed" else " · not installed")
+                if (!DeviceCapabilities.isCharging(context)) append(" · waiting for a charger")
+            }
+        }
+    }
 
-    /** Why the heavy tier is off, phrased for the settings screen. */
+    /** Why the HIGH tier is unavailable, phrased for the settings screen. */
     fun heavyUnavailableReason(): String? = when {
         DeviceCapabilities.ramTier(context) == RamTier.LOW_8GB ->
-            "Not enough RAM for a local heavy model on this device " +
-                "(${DeviceCapabilities.marketedRamGb(context)} GB). " +
-                "Use a cloud provider, or a 12 GB+ phone."
+            "This phone's tier (LOW, ${DeviceCapabilities.marketedRamGb(context)} GB) has no " +
+                "charging-only model: nothing bigger than the all-day one fits. Use a cloud provider."
 
         !LocalModelRuntime.available -> "llama.cpp runtime not bundled in this build."
         heavyModelCandidate()?.exists != true ->
-            "Model file not installed: ${heavyModelCandidate()?.fileName}"
+            "Not downloaded yet: ${heavyModelCandidate()?.fileName}"
+
+        !DeviceCapabilities.isCharging(context) ->
+            "Only runs while the phone is plugged in. Charge it and this becomes available."
 
         else -> null
     }
@@ -147,14 +186,12 @@ class LocalModelSelector(private val context: Context) {
          * test asserts the manifest and this list agree.
          */
         val SMALL_MODEL_FILES = listOf(
-            "phi-4-mini-q4.gguf",
             "qwen3-1.7b-q4.gguf",
             "gemma-3-1b-q4.gguf",
         )
 
         val HEAVY_MODEL_FILES = listOf(
             "qwen3-4b-q4.gguf",
-            "qwen3-8b-q4.gguf",
         )
     }
 }

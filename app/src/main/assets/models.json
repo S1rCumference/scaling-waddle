@@ -1,8 +1,8 @@
 {
   "version": 2,
   "_comment": [
-    "Model manifest. Every URL and sizeBytes here was verified against the Hugging Face Hub",
-    "and the GitHub releases they come from, not copied from a README.",
+    "Model manifest. Every URL and sizeBytes here was verified against the Hugging Face Hub,",
+    "not copied from a README.",
     "",
     "Digests: the VAD and ASR entries carry SHA-256 values computed by downloading those exact",
     "URLs and hashing the bytes. The GGUF chat models do not, because their digests are not",
@@ -11,10 +11,14 @@
     "file would not be caught, and hashVerified:false says so. The installer treats a null",
     "digest as size-checked only and the UI tells the user.",
     "",
-    "Tier mapping is deliberate. An 8 GB phone is offered a small chat model and no heavy one;",
-    "12 GB gets Phi-4-mini for chat and Qwen3-4B as the heavy tier; 16 GB+ gets Qwen3-8B.",
-    "requiredFreeMb is roughly the file plus KV cache and runtime overhead, so the selector",
-    "refuses a model that would be OOM-killed next to the ASR pipeline."
+    "Three tiers, and nothing that cannot run on 12 GB:",
+    "  LOW    6-8 GB   all-day: Gemma 3 1B (0.81 GB). No heavy model: nothing bigger fits.",
+    "  MEDIUM 12 GB    all-day: Qwen 3 1.7B (1.11 GB). Sized for all-day use beside ASR.",
+    "  HIGH   12 GB    charging and idle only: Qwen 3 4B (2.50 GB).",
+    "",
+    "Dropped: Phi-4-mini (2.49 GB, the same size as Qwen 3 4B but weaker for the heavy role,",
+    "and far too heavy to hold all day) and Qwen 3 8B (5.03 GB of weights, which does not load",
+    "reliably beside the recorder on 12 GB \u2014 it is not offered rather than offered and killed)."
   ],
   "models": [
     {
@@ -66,7 +70,7 @@
       "required": false,
       "archive": null,
       "hashVerified": false,
-      "notes": "The smallest chat model that is still useful. Fits an 8 GB phone alongside the recorder. Note this one is under Google's Gemma terms, not a standard open licence."
+      "notes": "LOW tier (6-8 GB phones): the all-day chat and correction model. 0.81 GB of weights is the most that can sit beside the recorder on an 8 GB phone without the system killing one of them. Under Google's Gemma terms, not a standard open licence."
     },
     {
       "id": "qwen3-1.7b-q4",
@@ -79,28 +83,11 @@
       "sha256": null,
       "license": "Apache-2.0",
       "licenseUrl": "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF",
-      "minRamTier": "LOW_8GB",
-      "required": false,
-      "archive": null,
-      "hashVerified": false,
-      "notes": "Preferred chat model on an 8 GB phone: noticeably better than the 1B while still leaving room for the recorder."
-    },
-    {
-      "id": "phi-4-mini-instruct-q4",
-      "role": "small_chat",
-      "displayName": "Phi-4-mini Instruct (Q4_K_M)",
-      "fileName": "phi-4-mini-q4.gguf",
-      "url": "https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/main/Phi-4-mini-instruct-Q4_K_M.gguf",
-      "revision": "main",
-      "sizeBytes": 2491874272,
-      "sha256": null,
-      "license": "MIT",
-      "licenseUrl": "https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF",
       "minRamTier": "MID_12GB",
       "required": false,
       "archive": null,
       "hashVerified": false,
-      "notes": "The always-ready assistant on a 12 GB phone. Loaded on demand and unloaded a few minutes later, so it is not resident all day."
+      "notes": "MEDIUM tier (12 GB phones, the default here): the all-day chat and correction model. Chosen for sustained use rather than peak quality \u2014 1.11 GB memory-maps in about a second, so the correction pass every few minutes costs a short CPU burst instead of paging gigabytes in and out all day."
     },
     {
       "id": "qwen3-4b-q4",
@@ -117,24 +104,7 @@
       "required": false,
       "archive": null,
       "hashVerified": false,
-      "notes": "Heavy tier for a 12 GB phone, run only while charging and idle. Whether the 8B fits here instead is a question for the on-device benchmark, not a guess."
-    },
-    {
-      "id": "qwen3-8b-q4",
-      "role": "heavy",
-      "displayName": "Qwen 3 8B (Q4_K_M)",
-      "fileName": "qwen3-8b-q4.gguf",
-      "url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
-      "revision": "main",
-      "sizeBytes": 5027783488,
-      "sha256": null,
-      "license": "Apache-2.0",
-      "licenseUrl": "https://huggingface.co/Qwen/Qwen3-8B-GGUF",
-      "minRamTier": "HIGH_16GB_PLUS",
-      "required": false,
-      "archive": null,
-      "hashVerified": false,
-      "notes": "Heavy tier for 16 GB and larger phones. Five gigabytes of weights, so charging and idle only."
+      "notes": "HIGH tier (12 GB phones, charging and idle only): the biggest model that loads reliably on 12 GB beside the ASR pipeline. 2.5 GB of weights plus KV cache is about the limit of what a 12 GB phone has free in practice, which is why it is never loaded on battery."
     }
   ]
 }

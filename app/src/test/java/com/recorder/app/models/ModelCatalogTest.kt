@@ -116,10 +116,10 @@ class ModelCatalogTest {
     }
 
     @Test
-    fun `a 12GB phone gets both a chat model and a heavy one`() {
+    fun `a 12GB phone gets the medium all-day model and the charging-only one`() {
         val picked = ModelCatalog.recommended(shipped, RamTier.MID_12GB)
         assertEquals(
-            "phi-4-mini-q4.gguf",
+            "qwen3-1.7b-q4.gguf",
             picked.first { it.role == ModelRole.SMALL_CHAT }.fileName,
         )
         assertEquals(
@@ -128,13 +128,47 @@ class ModelCatalogTest {
         )
     }
 
+    /**
+     * Nothing in this build needs more than 12 GB, so a 16 GB phone is offered exactly the
+     * same models rather than something larger that would not load reliably anyway.
+     */
     @Test
-    fun `a 16GB phone gets the largest heavy model`() {
-        val picked = ModelCatalog.recommended(shipped, RamTier.HIGH_16GB_PLUS)
+    fun `a 16GB phone is offered the same models as a 12GB one`() {
         assertEquals(
-            "qwen3-8b-q4.gguf",
-            picked.first { it.role == ModelRole.HEAVY }.fileName,
+            ModelCatalog.recommended(shipped, RamTier.MID_12GB).map { it.id },
+            ModelCatalog.recommended(shipped, RamTier.HIGH_16GB_PLUS).map { it.id },
         )
+    }
+
+    /** Three tiers: two all-day models and one charging-only model, and nothing else. */
+    @Test
+    fun `the manifest holds exactly the three tier models`() {
+        assertEquals(
+            listOf("gemma-3-1b-q4.gguf", "qwen3-1.7b-q4.gguf"),
+            shipped.filter { it.role == ModelRole.SMALL_CHAT }.map { it.fileName }.sorted(),
+        )
+        assertEquals(
+            listOf("qwen3-4b-q4.gguf"),
+            shipped.filter { it.role == ModelRole.HEAVY }.map { it.fileName },
+        )
+    }
+
+    /** Nothing above 12 GB: no entry may be gated on a tier bigger than MID_12GB. */
+    @Test
+    fun `no model requires more than a 12GB phone`() {
+        shipped.forEach { entry ->
+            assertTrue(
+                "${entry.id} is gated on ${entry.minRamTier}, above the 12 GB ceiling",
+                entry.minRamTier == RamTier.LOW_8GB || entry.minRamTier == RamTier.MID_12GB,
+            )
+        }
+    }
+
+    /** The download that actually matters on a 12 GB phone, so a regression is visible. */
+    @Test
+    fun `the 12GB download stays under four gigabytes`() {
+        val bytes = ModelCatalog.recommended(shipped, RamTier.MID_12GB).sumOf { it.sizeBytes }
+        assertTrue("12 GB tier would download $bytes bytes", bytes < 4L * 1024 * 1024 * 1024)
     }
 
     @Test

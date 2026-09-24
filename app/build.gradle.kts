@@ -22,9 +22,11 @@ android {
     compileSdk = rootProject.extra["compileSdkVersion"] as Int
 
     defaultConfig {
-        // ".v21" so 2.1 installs next to the stable app instead of replacing it. The code
-        // namespace stays com.recorder.app; only the installed identity differs.
-        applicationId = "com.recorder.app.v21"
+        // One app, one identity. 2.1 is an upgrade of the same app, not a second install:
+        // same id and same signing key, so it installs over the top and the in-app updater
+        // keeps working. versionCode comes from the tag (2.1.0 -> 20100), comfortably above
+        // stable's 0.2.0 -> 200.
+        applicationId = "com.recorder.app"
         minSdk = rootProject.extra["minSdkVersion"] as Int
         targetSdk = rootProject.extra["targetSdkVersion"] as Int
 
