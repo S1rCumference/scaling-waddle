@@ -396,7 +396,12 @@ private fun LineText(line: LineView, mode: TextMode, sideBySide: Boolean) {
     val faded = if (compact) CoverColors.faint else MaterialTheme.colorScheme.outline
     when (mode) {
         TextMode.ORIGINAL -> Text(line.original, color = main, fontSize = 16.sp)
-        TextMode.CORRECTED -> Text(line.corrected, color = main, fontSize = 16.sp)
+        // Summary never reaches here — it is a different view of the group, handled before
+        // the lines are rendered at all — but it is spelled out rather than swept into an
+        // else, so the next mode added has to come back and decide.
+        TextMode.SUMMARY,
+        TextMode.CORRECTED,
+        -> Text(line.corrected, color = main, fontSize = 16.sp)
         TextMode.BOTH -> if (sideBySide) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(line.original, color = faded, fontSize = 15.sp, modifier = Modifier.weight(1f))
