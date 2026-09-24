@@ -32,6 +32,7 @@ import com.recorder.core.storage.TranscriptSegment
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import com.recorder.app.correction.CorrectionGate
 import com.recorder.app.correction.CorrectionRunner
 import com.recorder.app.export.ExportTarget
 import com.recorder.app.export.Exporter
@@ -45,6 +46,7 @@ import com.recorder.app.service.MicLevels
 import com.recorder.core.llm.GroupAssistant
 import com.recorder.core.llm.ScopedLine
 import com.recorder.core.storage.DayKey
+import com.recorder.core.storage.CorrectionRunRecord
 import com.recorder.core.storage.DaySummary
 import com.recorder.core.storage.Diagnostics
 import com.recorder.core.storage.DiagnosticEntry
@@ -519,13 +521,6 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         _status.value = "Queued. Progress is in the notification and in Settings → Models."
     }
 
-    fun correctNow() = viewModelScope.launch {
-        _status.value = "Correcting new lines…"
-        val count = runCatching { CorrectionRunner.runBatch(drain = true) }.getOrDefault(0)
-        _status.value = if (count > 0) "Corrected $count lines" else
-            "Nothing corrected" + (CorrectionRunner.lastError?.let { ": $it" } ?: " — no new lines.")
-    }
-
     fun setRecording(enabled: Boolean) {
         val context = getApplication<Application>()
         viewModelScope.launch { settings.setRecordingEnabled(enabled) }
@@ -559,6 +554,28 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     /** Stops whatever is running. Actually stops it; it does not just hide the bar. */
     fun cancelRunning() = RunningTasks.cancelAll()
+
+    // --- AI scheduling ---------------------------------------------------------------------
+
+    /** Lines waiting for a pass. Drives the "process now" control and the Settings figure. */
+    val pendingCorrections: StateFlow<Int> = CorrectionRunner.pendingCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    /** The last pass, persisted, so this does not read "never" after every restart. */
+    val lastCorrectionRun: StateFlow<CorrectionRunRecord?> = settings.lastCorrectionRun
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** Why automatic passes are or are not running right now, in a sentence. */
+    fun schedulingStatus(): String = CorrectionGate.describe(getApplication())
+
+    /** The whole backlog, now, because the user asked rather than because a timer fired. */
+    fun processNow() = viewModelScope.launch(Dispatchers.Default) {
+        val done = CorrectionRunner.runAllPending(getApplication(), "Process now")
+        _status.value = when {
+            done > 0 -> "Corrected $done line(s)."
+            else -> CorrectionRunner.lastError ?: "Nothing was waiting."
+        }
+    }
 
     /** When the current pause ends, or 0. Shown on both the inner and the cover screen. */
     val pausedUntil: StateFlow<Long> = RecordingService.pausedUntil

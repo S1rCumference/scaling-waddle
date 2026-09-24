@@ -148,6 +148,16 @@ interface TranscriptDao {
     )
     suspend fun uncorrected(sinceTs: Long, limit: Int): List<TranscriptSegment>
 
+    /** How much work is waiting, for the backlog figure and the "process now" control. */
+    @Query(
+        """
+        SELECT COUNT(*) FROM transcript_segments
+        WHERE start_ts >= :sinceTs
+          AND id NOT IN (SELECT segment_id FROM segment_corrections)
+        """
+    )
+    fun uncorrectedCount(sinceTs: Long): Flow<Int>
+
     @Query("SELECT MAX(start_ts) FROM transcript_segments WHERE day_key = :dayKey")
     suspend fun lastStartOnDay(dayKey: Int): Long?
 

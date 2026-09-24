@@ -4,9 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
-import android.util.Log
 import com.recorder.app.ServiceLocator
 import com.recorder.app.service.TranscriptPipeline
+import com.recorder.core.storage.Diagnostics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -15,12 +15,15 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Wakes every few minutes, and corrects new lines if there are any.
+ * Watches for a moment when the phone can afford to think, and then does all of it at once.
  *
  * Lives in the recording service's scope because that is the one thing alive all day, but
- * shares nothing with the audio path: it only reads and writes text rows. It waits for a
- * pause in speech before starting, so the correction model and the speech decoder are not
- * competing for the CPU while someone is talking.
+ * shares nothing with the audio path: it only reads and writes text rows.
+ *
+ * The change from the old version is what it waits for. It used to wait for a timer; now it
+ * waits for [CorrectionGate] — charging, screen off, not hot, not saving power — and when
+ * that arrives it drains the whole backlog in one pass rather than taking a slice every
+ * quarter of an hour. Outside those conditions nothing runs unless it is asked for by hand.
  */
 class CorrectionLoop(private val context: Context) {
 
@@ -31,24 +34,31 @@ class CorrectionLoop(private val context: Context) {
         job = scope.launch {
             val settings = ServiceLocator.settings
             while (isActive) {
-                val charging = context.isCharging()
-                val minutes = if (charging) settings.correctionIntervalChargingMin.first()
-                else settings.correctionIntervalMin.first()
-                delay(minutes * 60_000L)
-
+                delay(POLL_MS)
                 if (!settings.correctionEnabled.first()) continue
-                if (!charging && context.batteryPercent() in 0..LOW_BATTERY_PERCENT) continue
+
+                val verdict = CorrectionGate.check(context)
+                if (verdict is CorrectionGate.Verdict.Blocked) {
+                    // Logged at most once per reason: a line a minute saying "not charging"
+                    // would bury everything else in Diagnostics.
+                    if (verdict.reason != lastBlockReason) {
+                        lastBlockReason = verdict.reason
+                        Diagnostics.i(TAG, "automatic passes paused: ${verdict.reason}")
+                    }
+                    continue
+                }
+                lastBlockReason = null
 
                 // Wait for a lull, but not forever: a long meeting still gets corrected.
                 var waited = 0L
-                while (System.currentTimeMillis() - TranscriptPipeline.lastSegmentAt < QUIET_MS && waited < MAX_WAIT_MS) {
+                while (System.currentTimeMillis() - TranscriptPipeline.lastSegmentAt < QUIET_MS &&
+                    waited < MAX_WAIT_MS
+                ) {
                     delay(QUIET_MS)
                     waited += QUIET_MS
                 }
 
-                runCatching { CorrectionRunner.runBatch(drain = charging) }
-                    .onSuccess { if (it > 0) Log.i(TAG, "corrected $it lines") }
-                    .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it else Log.w(TAG, "batch failed", it) }
+                CorrectionRunner.runAllPending(context, "Overnight correction")
             }
         }
     }
@@ -58,11 +68,16 @@ class CorrectionLoop(private val context: Context) {
         job = null
     }
 
+    @Volatile
+    private var lastBlockReason: String? = null
+
     private companion object {
         const val TAG = "CorrectionLoop"
+
+        /** How often the conditions are re-checked. Cheap; it is three system calls. */
+        const val POLL_MS = 2 * 60_000L
         const val QUIET_MS = 15_000L
         const val MAX_WAIT_MS = 5 * 60_000L
-        const val LOW_BATTERY_PERCENT = 20
     }
 }
 

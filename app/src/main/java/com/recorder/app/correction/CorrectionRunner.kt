@@ -1,5 +1,6 @@
 package com.recorder.app.correction
 
+import android.content.Context
 import com.recorder.app.ServiceLocator
 import com.recorder.core.llm.CorrectionWindow
 import com.recorder.core.llm.DayVocabulary
@@ -13,6 +14,7 @@ import com.recorder.core.storage.SegmentCorrection
 import com.recorder.core.storage.TranscriptSegment
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -104,6 +106,43 @@ object CorrectionRunner {
         val segments = db.transcripts().inRange(fromTs, toTs)
         runWindows(segments, CorrectionPass.MANUAL, "Re-correcting")
     }
+
+    /**
+     * Everything outstanding, in one pass, wherever the request came from.
+     *
+     * Both the automatic path and the "process now" button land here, so there is one
+     * definition of "do the work" rather than a scheduled trickle and a separate manual
+     * route that behave differently. Draining is the point: a slice every quarter hour was
+     * what made the phone hot, and finishing the backlog then stopping is cheaper than
+     * never finishing it.
+     */
+    suspend fun runAllPending(context: Context, label: String): Int {
+        if (CorrectionGate.tooHotForAnything(context)) {
+            Diagnostics.w(TAG, "$label skipped: the phone is too hot")
+            lastError = "The phone is too hot. Let it cool down and try again."
+            return 0
+        }
+        val startedAt = System.currentTimeMillis()
+        val done = runCatching { runBatch(drain = true) }
+            .getOrElse { error ->
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                Diagnostics.w(TAG, "$label failed", error)
+                -1
+            }
+        val elapsed = System.currentTimeMillis() - startedAt
+        if (done >= 0) {
+            ServiceLocator.settings.recordCorrectionRun(elapsed, done)
+            Diagnostics.i(
+                TAG,
+                "$label: $done line(s) in ${"%.1f".format(elapsed / 1000.0)}s",
+            )
+        }
+        return done.coerceAtLeast(0)
+    }
+
+    /** How much text is waiting for a pass, for the backlog figure and the button. */
+    fun pendingCount(): Flow<Int> =
+        db.transcripts().uncorrectedCount(System.currentTimeMillis() - BATCH_LOOKBACK_MS)
 
     /** Whether [dayKey] has speech the last overnight pass did not cover. */
     suspend fun dayNeedsPass(dayKey: Int): Boolean {

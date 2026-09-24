@@ -473,6 +473,17 @@ private fun MicSensitivitySection(viewModel: RecorderViewModel) {
     TextButton(onClick = viewModel::resetMicHighest) { Text("Reset the highest") }
 }
 
+/** "4 minutes ago", "yesterday" — enough to judge freshness without doing arithmetic. */
+private fun relativeTime(ts: Long): String {
+    val ago = System.currentTimeMillis() - ts
+    return when {
+        ago < 60_000 -> "just now"
+        ago < 60 * 60_000 -> "${ago / 60_000} minute(s) ago"
+        ago < 24 * 60 * 60_000L -> "${ago / (60 * 60_000)} hour(s) ago"
+        else -> "${ago / (24 * 60 * 60_000L)} day(s) ago"
+    }
+}
+
 @Composable
 private fun Section(title: String, key: String, content: @Composable () -> Unit) {
     val open by AppUiState.settingsSection.collectAsState()
@@ -604,9 +615,39 @@ private fun ModelsSection(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
 
 @Composable
 private fun CorrectionSection(viewModel: RecorderViewModel) {
+    val pending by viewModel.pendingCorrections.collectAsState()
+    val lastRun by viewModel.lastCorrectionRun.collectAsState()
+
+    // When it last ran, how long it took, how much is waiting, and why it is or is not
+    // running now. Four facts that between them answer "is the AI working".
+    Card(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Text("Automatic passes", style = MaterialTheme.typography.titleSmall)
+            Text(viewModel.schedulingStatus(), style = MaterialTheme.typography.bodySmall)
+            Text(
+                "Runs on its own only while charging with the screen off, and stops when the " +
+                    "phone is hot or saving power.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                lastRun?.let {
+                    "Last run ${relativeTime(it.atTs)} · ${"%.1f".format(it.durationMs / 1000.0)}s · " +
+                        "${it.lines} line(s)"
+                } ?: "Has not run yet.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            Text(
+                if (pending > 0) "$pending line(s) waiting" else "Nothing waiting",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (pending > 0) {
+                TextButton(onClick = viewModel::processNow) { Text("Process now") }
+            }
+        }
+    }
+
     val enabled by viewModel.correctionEnabled.collectAsState()
-    val battery by viewModel.correctionInterval.collectAsState()
-    val charging by viewModel.correctionIntervalCharging.collectAsState()
     val endOfDay by viewModel.endOfDayEnabled.collectAsState()
     val progress by viewModel.correctionProgress.collectAsState()
 
@@ -618,15 +659,10 @@ private fun CorrectionSection(viewModel: RecorderViewModel) {
     )
     Row(verticalAlignment = Alignment.CenterVertically) {
         Switch(checked = enabled, onCheckedChange = viewModel::setCorrectionEnabled)
-        Text("Correct new lines in small batches", modifier = Modifier.padding(start = 8.dp))
+        Text("Let the AI correct new lines", modifier = Modifier.padding(start = 8.dp))
     }
-    MinutesStepper("On battery, every", battery) { viewModel.setCorrectionIntervals(it, charging) }
-    MinutesStepper("While charging, every", charging) { viewModel.setCorrectionIntervals(battery, it) }
-    Text(
-        "Batches wait for a pause in speech, and skip entirely below 20% battery. Each one loads the " +
-            "model for a few seconds of full CPU, so a longer interval on battery saves the most.",
-        style = MaterialTheme.typography.bodySmall,
-    )
+    // The interval steppers are gone rather than left showing a number nothing reads.
+    // Passes are not on a timer any more; the conditions above are the schedule.
     Row(verticalAlignment = Alignment.CenterVertically) {
         Switch(checked = endOfDay, onCheckedChange = viewModel::setEndOfDayEnabled)
         Text("End-of-day pass while charging overnight", modifier = Modifier.padding(start = 8.dp))
@@ -637,21 +673,7 @@ private fun CorrectionSection(viewModel: RecorderViewModel) {
         style = MaterialTheme.typography.bodySmall,
     )
     progress?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-    Button(onClick = viewModel::correctNow) { Text("Correct new lines now") }
-}
-
-@Composable
-private fun MinutesStepper(label: String, minutes: Int, onChange: (Int) -> Unit) {
-    val steps = listOf(1, 2, 3, 5, 10, 15, 20, 30, 45, 60, 90, 120)
-    val index = steps.indexOfFirst { it >= minutes }.let { if (it < 0) steps.lastIndex else it }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-        TextButton(onClick = { onChange(steps[(index - 1).coerceAtLeast(0)]) }, enabled = index > 0) { Text("−") }
-        Text("$minutes min", style = MaterialTheme.typography.bodyMedium)
-        TextButton(onClick = { onChange(steps[(index + 1).coerceAtMost(steps.lastIndex)]) }, enabled = index < steps.lastIndex) {
-            Text("+")
-        }
-    }
+    Button(onClick = viewModel::processNow) { Text("Process everything waiting now") }
 }
 
 @Composable

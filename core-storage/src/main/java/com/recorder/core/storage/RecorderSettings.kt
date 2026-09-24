@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
@@ -158,6 +159,29 @@ class RecorderSettings(private val context: Context) {
 
     suspend fun setAsrThreads(threads: Int) = edit { it[Keys.ASR_THREADS] = threads.coerceIn(1, 8) }
 
+    /**
+     * When the last AI pass ran, how long it took, and how much it did.
+     *
+     * Persisted rather than held in memory: the recorder's process is restarted often
+     * enough that an in-memory figure would usually read "never", which is exactly the
+     * question this is meant to answer.
+     */
+    val lastCorrectionRun: Flow<CorrectionRunRecord?> =
+        context.dataStore.data.map { prefs ->
+            val ts = prefs[Keys.LAST_RUN_TS] ?: return@map null
+            CorrectionRunRecord(
+                atTs = ts,
+                durationMs = prefs[Keys.LAST_RUN_MS] ?: 0L,
+                lines = prefs[Keys.LAST_RUN_LINES] ?: 0,
+            )
+        }
+
+    suspend fun recordCorrectionRun(durationMs: Long, lines: Int) = edit {
+        it[Keys.LAST_RUN_TS] = System.currentTimeMillis()
+        it[Keys.LAST_RUN_MS] = durationMs
+        it[Keys.LAST_RUN_LINES] = lines
+    }
+
     suspend fun setVadThreshold(threshold: Float) = edit {
         it[Keys.VAD_THRESHOLD] = threshold.coerceIn(0.05f, 0.95f)
     }
@@ -179,6 +203,9 @@ class RecorderSettings(private val context: Context) {
             stringSetPreferencesKey("suspended_packages")
         val ASR_THREADS = intPreferencesKey("asr_threads")
         val VAD_THRESHOLD = floatPreferencesKey("vad_threshold")
+        val LAST_RUN_TS = longPreferencesKey("last_correction_run_ts")
+        val LAST_RUN_MS = longPreferencesKey("last_correction_run_ms")
+        val LAST_RUN_LINES = intPreferencesKey("last_correction_run_lines")
         val CORRECTION_ENABLED = booleanPreferencesKey("correction_enabled")
         val CORRECTION_INTERVAL = intPreferencesKey("correction_interval_min")
         val CORRECTION_INTERVAL_CHARGING = intPreferencesKey("correction_interval_charging_min")
@@ -229,3 +256,10 @@ object ExportDefaults {
     const val FORMAT_MARKDOWN = "markdown"
     const val FORMAT_TEXT = "text"
 }
+
+/** The last automatic or on-demand AI pass, for the status line in Settings. */
+data class CorrectionRunRecord(
+    val atTs: Long,
+    val durationMs: Long,
+    val lines: Int,
+)
