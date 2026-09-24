@@ -55,6 +55,7 @@ import com.recorder.core.storage.ModelChoice
 import com.recorder.core.storage.RunningTasks
 import com.recorder.core.storage.latestBySegment
 import java.util.TimeZone
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -358,7 +359,7 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     fun recorrect(group: GroupRef) {
         if (group.kind == GroupKind.ALL) return
         val label = "Re-run correction"
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.Default) {
             AppUiState.appendTurn(group.id, ChatTurn(label, "", pending = true))
             val count = runCatching { CorrectionRunner.runRange(group.fromTs, group.toTs) }.getOrDefault(0)
             val text = when {
@@ -417,7 +418,10 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         label: String,
         block: suspend (GroupAssistant, List<ScopedLine>) -> ChatTurn,
     ) {
-        viewModelScope.launch {
+        // Off the main thread by policy, not by luck. viewModelScope is
+        // Dispatchers.Main.immediate, so without this the prompt building, the answer
+        // parsing and the flow collection all run where the UI is drawn.
+        viewModelScope.launch(Dispatchers.Default) {
             AppUiState.appendTurn(group.id, ChatTurn(label, "", pending = true))
             val turn = runCatching {
                 val chosen = ServiceLocator.providers.askProvider()
@@ -547,6 +551,14 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun resetMicHighest() = MicLevels.resetHighest()
+
+    // --- Running work ----------------------------------------------------------------------
+
+    /** Everything in flight, for the progress bar's elapsed time and Cancel button. */
+    val runningTasks: StateFlow<List<RunningTasks.Task>> = RunningTasks.tasks
+
+    /** Stops whatever is running. Actually stops it; it does not just hide the bar. */
+    fun cancelRunning() = RunningTasks.cancelAll()
 
     /** When the current pause ends, or 0. Shown on both the inner and the cover screen. */
     val pausedUntil: StateFlow<Long> = RecordingService.pausedUntil

@@ -1,6 +1,8 @@
 package com.recorder.core.storage
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,6 +30,12 @@ object RunningTasks {
         val startedAt: Long,
         /** Optional live detail, e.g. "window 3 of 12". */
         val detail: String? = null,
+        /**
+         * Stops the work for real, rather than hiding the indicator. Null when the task did
+         * not register one; the UI hides the button in that case rather than offering a
+         * cancel that does nothing.
+         */
+        val cancel: (() -> Unit)? = null,
     ) {
         val elapsedMs: Long get() = System.currentTimeMillis() - startedAt
     }
@@ -42,9 +50,9 @@ object RunningTasks {
     /** One line to put beside a progress bar, or null when nothing is running. */
     val summary: StateFlow<String?> = _summary.asStateFlow()
 
-    fun start(id: String, label: String) {
+    fun start(id: String, label: String, cancel: (() -> Unit)? = null) {
         _tasks.update { list ->
-            list.filterNot { it.id == id } + Task(id, label, System.currentTimeMillis())
+            list.filterNot { it.id == id } + Task(id, label, System.currentTimeMillis(), cancel = cancel)
         }
         publish()
         Diagnostics.i(TAG, "started: $label")
@@ -66,9 +74,32 @@ object RunningTasks {
         }
     }
 
-    /** Runs [block] as a tracked task, and closes the task whatever it does or throws. */
+    /**
+     * Cancels [id] if it registered a way to be cancelled. Safe to call for anything.
+     */
+    fun cancel(id: String) {
+        val task = _tasks.value.firstOrNull { it.id == id } ?: return
+        val stop = task.cancel
+        if (stop == null) {
+            Diagnostics.w(TAG, "${task.label} cannot be cancelled")
+            return
+        }
+        Diagnostics.i(TAG, "cancelling ${task.label}")
+        runCatching { stop() }
+    }
+
+    /** Cancels everything cancellable. What the one button in the UI does. */
+    fun cancelAll() = _tasks.value.forEach { cancel(it.id) }
+
+    /**
+     * Runs [block] as a tracked task, and closes the task whatever it does or throws.
+     *
+     * The running coroutine's own job is registered as the cancel action, so pressing cancel
+     * unwinds the generation rather than just clearing the indicator.
+     */
     suspend fun <T> track(id: String, label: String, block: suspend () -> T): T {
-        start(id, label)
+        val job = currentCoroutineContext()[Job]
+        start(id, label, cancel = job?.let { { it.cancel() } })
         try {
             val result = block()
             finish(id)

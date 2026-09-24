@@ -14,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * An on-device model behind the same [LlmProvider] interface as Claude/OpenAI/Gemini, so
@@ -56,7 +57,21 @@ class LocalModelProvider(
     override suspend fun complete(messages: List<ChatMessage>, tools: List<ToolSpec>): LlmResponse =
         run(messages, TokenBudget(maxTokens, deadlineMs = 60_000))
 
-    private suspend fun run(messages: List<ChatMessage>, budget: TokenBudget): LlmResponse {
+    /**
+     * Inference never runs on the caller's thread, whoever the caller is.
+     *
+     * This is the load-bearing line for "Recorder isn't responding". The wrapper's flow is
+     * flowOn(its own dispatcher), so the *producer* was always off the main thread — but the
+     * collector runs wherever the caller is, and every caller here arrives from
+     * viewModelScope, which is Dispatchers.Main.immediate. So a thousand-token answer meant
+     * a thousand callbacks, string appends and state writes on the main thread while it was
+     * also supposed to be drawing. Fixing it at this seam covers every path into the model
+     * at once, rather than hoping each call site remembers.
+     */
+    private suspend fun run(messages: List<ChatMessage>, budget: TokenBudget): LlmResponse =
+        withContext(Dispatchers.Default) { generate(messages, budget) }
+
+    private suspend fun generate(messages: List<ChatMessage>, budget: TokenBudget): LlmResponse {
         val spec = selector.select(choice)
             ?: return LlmResponse.unavailable(unavailableReason())
 

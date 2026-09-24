@@ -11,6 +11,8 @@ import com.recorder.core.storage.Diagnostics
 import com.recorder.core.storage.RunningTasks
 import com.recorder.core.storage.SegmentCorrection
 import com.recorder.core.storage.TranscriptSegment
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -119,7 +121,13 @@ object CorrectionRunner {
 
         val windows = segments.chunked(window)
         var total = 0
-        RunningTasks.start(TASK, what)
+        // Registered with the running job so the Cancel button stops the pass rather than
+        // hiding the bar and leaving the model chewing through the rest of the windows.
+        RunningTasks.start(
+            TASK,
+            what,
+            cancel = currentCoroutineContext()[Job]?.let { job -> { job.cancel() } },
+        )
         Diagnostics.i(
             TAG,
             "$what: ${segments.size} line(s) in ${windows.size} window(s), " +

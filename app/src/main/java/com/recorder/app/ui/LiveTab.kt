@@ -20,6 +20,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.recorder.app.service.RecordingService
+import kotlinx.coroutines.delay
 import com.recorder.core.storage.HourSummary
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -51,18 +53,42 @@ private val SHORT_CLOCK = SimpleDateFormat("HH:mm", Locale.getDefault())
 fun BusyBar(viewModel: RecorderViewModel) {
     val compact = LocalCompact.current
     val busy by viewModel.busy.collectAsState()
+    val running by viewModel.runningTasks.collectAsState()
     val label = busy ?: return
+
+    // One second is the right granularity for "is this still going". Ticking only while
+    // something is running means an idle app does no work for this at all.
+    val elapsed by produceState(0L, running.isNotEmpty()) {
+        while (running.isNotEmpty()) {
+            value = running.minOfOrNull { System.currentTimeMillis() - it.startedAt } ?: 0L
+            delay(1_000)
+        }
+    }
+    val cancellable = running.any { it.cancel != null }
 
     Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
         LinearProgressIndicator(Modifier.fillMaxWidth())
-        Text(
-            label,
-            color = if (compact) CoverColors.live else MaterialTheme.colorScheme.primary,
-            fontSize = if (compact) 11.sp else 12.sp,
-            maxLines = 1,
-            modifier = Modifier.padding(top = 2.dp),
-        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "$label · ${formatRunTime(elapsed)}",
+                color = if (compact) CoverColors.live else MaterialTheme.colorScheme.primary,
+                fontSize = if (compact) 11.sp else 12.sp,
+                maxLines = 1,
+                modifier = Modifier.weight(1f).padding(top = 2.dp),
+            )
+            if (cancellable) {
+                TextButton(onClick = viewModel::cancelRunning) {
+                    Text("Cancel", fontSize = if (compact) 11.sp else 13.sp)
+                }
+            }
+        }
     }
+}
+
+/** m:ss, which is the scale these actually run on. */
+private fun formatRunTime(ms: Long): String {
+    val seconds = (ms / 1000).coerceAtLeast(0)
+    return "%d:%02d".format(seconds / 60, seconds % 60)
 }
 
 /**
