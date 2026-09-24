@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <!-- Only the update APKs are shared, and only with the system installer. -->
+    <!-- Update APKs, handed to the system installer. -->
     <cache-path name="updates" path="updates/" />
+    <!-- Exports, handed to whichever app the user picks in the share sheet. -->
+    <cache-path name="exports" path="exports/" />
 </paths>

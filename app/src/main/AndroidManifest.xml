@@ -23,6 +23,19 @@
     -->
     <uses-sdk tools:overrideLibrary="com.arm.aichat" />
 
+    <!--
+        Other builds of this app that can be installed alongside this one. Visible so the app
+        can tell the user when another version is holding the microphone.
+    -->
+    <queries>
+        <package android:name="com.recorder.app" />
+        <package android:name="com.recorder.app.standard" />
+        <package android:name="com.recorder.app.debug" />
+        <package android:name="com.recorder.app.v21" />
+        <package android:name="com.recorder.app.v21.standard" />
+        <package android:name="com.recorder.app.v21.debug" />
+    </queries>
+
     <!-- No SIM ever goes in this phone; nothing here should imply telephony. -->
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="true" />

@@ -25,25 +25,50 @@ import kotlinx.coroutines.sync.withLock
  */
 class LlamaCppEngine(
     private val engine: InferenceEngine,
+    private val modelPath: String,
     override val modelName: String,
 ) : LocalLlm {
 
     // sendUserPrompt drives one shared native context; overlapping calls would interleave.
     private val turnLock = Mutex()
-    private var lastSystemPrompt: String? = null
 
+    /** True once a user prompt has gone into the native context since the last load. */
+    private var dirty = false
+
+    /**
+     * Every call is a fresh conversation. The wrapper keeps chat history in its native
+     * context and only accepts a system prompt *immediately* after a load
+     * (InferenceEngineImpl.setSystemPrompt checks `_readyForSystemPrompt`), so a second call
+     * with a different system prompt used to throw, and a second call with the same one
+     * silently carried the previous task's text along. Reloading is cheap: the weights are
+     * memory-mapped and still in the page cache.
+     */
     override suspend fun generate(prompt: String, systemPrompt: String?, maxTokens: Int): String =
         turnLock.withLock {
-            // Re-sending an unchanged system prompt would re-process it every question.
-            if (systemPrompt != null && systemPrompt != lastSystemPrompt) {
-                engine.setSystemPrompt(systemPrompt)
-                lastSystemPrompt = systemPrompt
-            }
+            if (dirty) reload()
+            dirty = true
+            if (!systemPrompt.isNullOrBlank()) engine.setSystemPrompt(systemPrompt)
 
             val out = StringBuilder()
-            engine.sendUserPrompt(prompt, maxTokens).collect { chunk -> out.append(chunk) }
-            out.toString()
+            engine.sendUserPrompt(prompt + thinkingSwitch(), maxTokens).collect { chunk -> out.append(chunk) }
+            stripThinking(out.toString())
         }
+
+    private suspend fun reload() {
+        engine.cleanUp()
+        engine.loadModel(modelPath)
+        val state = engine.state.first { it is State.ModelReady || it is State.Error }
+        if (state is State.Error) error("reload failed: ${state.exception.message}")
+        dirty = false
+    }
+
+    /**
+     * Qwen 3 reasons in a <think> block before answering unless told not to, which on a phone
+     * spends the whole token budget on reasoning nobody reads. "/no_think" is Qwen 3's
+     * documented switch; other models never see it.
+     */
+    private fun thinkingSwitch(): String =
+        if (modelName.startsWith("qwen3", ignoreCase = true)) " /no_think" else ""
 
     /**
      * The wrapper ships its own benchmark, which is why this project does not hand-roll one:
@@ -71,6 +96,10 @@ class LlamaCppEngine(
     }
 }
 
+/** Removes a leading reasoning block, including the empty one Qwen 3 emits under /no_think. */
+internal fun stripThinking(text: String): String =
+    text.replace(Regex("(?s)<think>.*?</think>"), "").replace("<think>", "").trim()
+
 class LlamaCppPlugin : LocalLlmPlugin {
 
     override suspend fun load(context: Context, modelPath: String, contextSize: Int): LocalLlm? {
@@ -89,7 +118,7 @@ class LlamaCppPlugin : LocalLlmPlugin {
             if (state is State.Error) error("engine error: ${state.exception.message}")
             check(engine.state.value.isModelLoaded) { "engine finished without a loaded model" }
 
-            LlamaCppEngine(engine, file.name)
+            LlamaCppEngine(engine, modelPath, file.name)
         }.onFailure { Log.w(TAG, "load failed for ${file.name}", it) }.getOrNull()
     }
 

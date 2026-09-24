@@ -3,7 +3,13 @@ package com.recorder.core.audio
 import android.Manifest
 import android.annotation.SuppressLint
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.AudioRecordingConfiguration
+import android.os.Build
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import kotlinx.coroutines.flow.buffer
 import android.media.MediaRecorder
 import android.util.Log
 import androidx.annotation.RequiresPermission
@@ -23,6 +29,11 @@ import kotlin.concurrent.thread
 class AudioCapture(
     val sampleRate: Int = SAMPLE_RATE,
     val frameSamples: Int = FRAME_SAMPLES,
+    /**
+     * Told when Android starts or stops silencing this recording because another app has
+     * taken the microphone (Android 10+ concurrent-capture policy). Metadata only.
+     */
+    private val onSilencedChanged: ((Boolean) -> Unit)? = null,
 ) {
 
     @SuppressLint("MissingPermission")
@@ -52,6 +63,8 @@ class AudioCapture(
         }
 
         record.startRecording()
+        val watcher = Executors.newSingleThreadExecutor()
+        val silenceWatch = watchSilencing(record, watcher)
         val running = java.util.concurrent.atomic.AtomicBoolean(true)
         val reader = thread(name = "audio-capture", isDaemon = true) {
             val pcm = ShortArray(frameSamples)
@@ -73,12 +86,40 @@ class AudioCapture(
         }
 
         awaitClose {
+            silenceWatch?.let { runCatching { record.unregisterAudioRecordingCallback(it) } }
+            watcher.shutdown()
             running.set(false)
             reader.join(500)
             runCatching { record.stop() }
             record.release()
         }
-    }.flowOn(Dispatchers.IO)
+    }
+        // Up to a minute of audio can queue here if decoding falls behind — for instance
+        // while the correction model has the CPU. A short default buffer would silently drop
+        // frames instead, and dropped audio is the one loss this app cannot recover from.
+        .buffer(capacity = BACKLOG_FRAMES)
+        .flowOn(Dispatchers.IO)
+
+    private fun watchSilencing(record: AudioRecord, executor: Executor): AudioManager.AudioRecordingCallback? {
+        val listener = onSilencedChanged ?: return null
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        var last: Boolean? = null
+        fun report(silenced: Boolean) {
+            if (silenced != last) {
+                last = silenced
+                listener(silenced)
+            }
+        }
+        val callback = object : AudioManager.AudioRecordingCallback() {
+            override fun onRecordingConfigChanged(configs: List<AudioRecordingConfiguration>) {
+                val mine = configs.firstOrNull { it.clientAudioSessionId == record.audioSessionId }
+                report(mine?.isClientSilenced == true)
+            }
+        }
+        record.registerAudioRecordingCallback(executor, callback)
+        record.activeRecordingConfiguration?.let { report(it.isClientSilenced) }
+        return callback
+    }
 
     companion object {
         private const val TAG = "AudioCapture"
@@ -90,6 +131,9 @@ class AudioCapture(
         const val FRAME_SAMPLES = 512
 
         private const val BUFFER_FRAMES = 32
+
+        /** 60 s of 32 ms frames, about 3.8 MB at worst. */
+        private const val BACKLOG_FRAMES = 1_875
     }
 }
 

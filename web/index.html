@@ -79,13 +79,34 @@
   device. No account, no cloud transcription, no subscription.
 </p>
 
+<h2>Recorder 2.1 <span class="size">(new)</span></h2>
+<p class="lede">
+  One app across both screens, logs grouped by hour and day, corrected transcripts, export,
+  and questions about any hour or day. It installs <strong>next to</strong> the stable app
+  with its own icon, so you can try it without losing anything.
+</p>
 <a class="btn" href="__RAZR_URL__">
-  Download for Razr
+  Download 2.1 for Razr
   <span class="size">Flip phones · __RAZR_SIZE__ · version __VERSION__</span>
 </a>
 <a class="btn secondary" href="__STANDARD_URL__">
-  Other phones
+  2.1 for other phones
   <span class="size">No cover screen · __STANDARD_SIZE__</span>
+</a>
+<div class="card">
+  <p><strong>Only one can record at a time.</strong> Android gives the microphone to one app,
+  so before starting 2.1, open the stable Recorder and switch recording off. 2.1 checks this
+  on first launch and tells you if the other one is still listening.</p>
+</div>
+
+<h2>Recorder (stable)</h2>
+<a class="btn secondary" href="__STABLE_RAZR_URL__">
+  Download stable for Razr
+  <span class="size">Flip phones · version __STABLE_VERSION__</span>
+</a>
+<a class="btn secondary" href="__STABLE_STANDARD_URL__">
+  Stable for other phones
+  <span class="size">No cover screen · version __STABLE_VERSION__</span>
 </a>
 
 <h2>Installing it</h2>
@@ -114,10 +135,12 @@
   <a href="__CHECKSUMS_URL__">SHA256SUMS</a>, published by the build that produced these files.
 </p>
 <div class="card">
-  <p><code>recorder-razr-release.apk</code></p>
+  <p><code>__ASSET_PREFIX__-razr.apk</code></p>
   <p class="hash">__RAZR_SHA__</p>
-  <p><code>recorder-standard-release.apk</code></p>
+  <p><code>__ASSET_PREFIX__-standard.apk</code></p>
   <p class="hash">__STANDARD_SHA__</p>
+  <p><code>recorder-razr-release.apk</code> (stable)</p>
+  <p class="hash">__STABLE_RAZR_SHA__</p>
 </div>
 <p class="lede">
   Every build is made in public by GitHub Actions from the source in this repository, and

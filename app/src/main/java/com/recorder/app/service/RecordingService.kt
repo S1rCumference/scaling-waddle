@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import com.recorder.app.BuildConfig
 import com.recorder.app.R
 import com.recorder.app.ServiceLocator
+import com.recorder.app.correction.CorrectionLoop
 import com.recorder.app.cover.CoverPresenter
 import com.recorder.app.ui.MainActivity
 import com.recorder.core.asr.AsrEngine
@@ -58,6 +59,9 @@ class RecordingService : Service() {
      */
     private var coverPresenter: CoverPresenter? = null
 
+    /** Text-only correction behind recording. Never touches the audio path. */
+    private val correctionLoop = CorrectionLoop(this)
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -75,6 +79,7 @@ class RecordingService : Service() {
         }
 
         startPipeline()
+        correctionLoop.start(scope)
 
         if (BuildConfig.COVER_UI_ENABLED) {
             coverPresenter = CoverPresenter(this).also { it.start() }
@@ -96,6 +101,8 @@ class RecordingService : Service() {
 
     override fun onDestroy() {
         coverPresenter?.stop()
+        correctionLoop.stop()
+        _micSilenced.value = false
         scope.cancel()
         vad?.close()
         asr?.close()
@@ -138,7 +145,10 @@ class RecordingService : Service() {
                 ),
             )
 
-            AudioCapture().frames()
+            AudioCapture(onSilencedChanged = { silenced ->
+                _micSilenced.value = silenced
+                if (silenced) Log.w(TAG, "microphone is being given to another app; this recording is silent")
+            }).frames()
                 .segmentSpeech(detector, SpeechSegmenter(threshold = threshold))
                 .catch { error ->
                     Log.e(TAG, "capture pipeline failed", error)
@@ -201,6 +211,15 @@ class RecordingService : Service() {
 
         /** Observable so the UI can show whether recording is actually running. */
         val state: StateFlow<RecorderState> = _state.asStateFlow()
+
+        private val _micSilenced = MutableStateFlow(false)
+
+        /**
+         * True while Android is feeding this recorder silence because another app holds the
+         * microphone — typically the other installed version of Recorder. Android does not
+         * fail the recording in that case, it quietly zeroes it, so this is the only signal.
+         */
+        val micSilenced: StateFlow<Boolean> = _micSilenced.asStateFlow()
 
         const val ACTION_RESUME = "com.recorder.app.action.RESUME"
 

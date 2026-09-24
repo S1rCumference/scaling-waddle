@@ -39,6 +39,7 @@ class TranscriptPipeline(
             audioMs = segment.durationMs,
             cpuNanos = System.nanoTime() - startedAt,
         )
+        lastSegmentAt = System.currentTimeMillis()
         if (text.isBlank()) return
 
         val row = TranscriptSegment(
@@ -58,7 +59,12 @@ class TranscriptPipeline(
         }
     }
 
-    private companion object {
-        const val TAG = "TranscriptPipeline"
+    companion object {
+        private const val TAG = "TranscriptPipeline"
+
+        /** When speech was last decoded, so background work can wait for a pause. */
+        @Volatile
+        var lastSegmentAt: Long = 0L
+            private set
     }
 }

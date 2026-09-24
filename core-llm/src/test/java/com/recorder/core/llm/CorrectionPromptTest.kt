@@ -1,0 +1,96 @@
+package com.recorder.core.llm
+
+import com.recorder.core.storage.TranscriptSegment
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class CorrectionPromptTest {
+
+    private fun seg(id: Long, text: String) = TranscriptSegment(id = id, startTs = id * 1000, endTs = id * 1000 + 500, text = text)
+
+    @Test
+    fun `the real example from the logs is accepted as a correction`() {
+        assertTrue(CorrectionPrompt.plausible("go through my contacts", "go through my content"))
+    }
+
+    @Test
+    fun `a paraphrase or summary is rejected`() {
+        val original = "so I was thinking we could maybe move the delivery to Thursday if that works"
+        assertFalse(CorrectionPrompt.plausible(original, "Delivery moved to Thursday."))
+        assertFalse(CorrectionPrompt.plausible(original, ""))
+    }
+
+    @Test
+    fun `numbered lines are parsed in several sloppy formats`() {
+        val out = """
+            Here you go:
+            1| go through my content
+            2: the invoice is due Friday
+            **3.** call Dave back
+            1| a repeated first line is ignored
+            9| out of range is ignored
+        """.trimIndent()
+        val parsed = CorrectionPrompt.parse(out, 3)
+        assertEquals(mapOf(0 to "go through my content", 1 to "the invoice is due Friday", 2 to "call Dave back"), parsed)
+    }
+
+    @Test
+    fun `lines after the last answered one are left for the next batch`() {
+        val targets = listOf(seg(1, "go through my contacts"), seg(2, "hello there"), seg(3, "see you tomorrow"))
+        val resolved = CorrectionPrompt.resolve(targets, mapOf(0 to "go through my content"))
+        assertEquals(mapOf(1L to "go through my content"), resolved)
+    }
+
+    @Test
+    fun `skipped middle lines count as unchanged and implausible answers keep the original`() {
+        val targets = listOf(
+            seg(1, "go through my contacts"),
+            seg(2, "hello there"),
+            seg(3, "we should order twelve more boxes of the large ones"),
+        )
+        val resolved = CorrectionPrompt.resolve(
+            targets,
+            mapOf(0 to "go through my content", 2 to "Order boxes."),
+        )
+        assertEquals("go through my content", resolved[1L])
+        assertEquals("hello there", resolved[2L])
+        assertEquals("we should order twelve more boxes of the large ones", resolved[3L])
+    }
+
+    @Test
+    fun `nothing parseable means nothing is stored`() {
+        assertTrue(CorrectionPrompt.resolve(listOf(seg(1, "hi")), emptyMap()).isEmpty())
+    }
+
+    @Test
+    fun `the prompt numbers only the targets and marks context as context`() {
+        val prompt = CorrectionPrompt.build(
+            CorrectionWindow(before = listOf("earlier line"), targets = listOf(seg(1, "a b c")), after = listOf("later line")),
+        )
+        assertTrue("1| a b c" in prompt)
+        assertTrue("- earlier line" in prompt)
+        assertTrue("- later line" in prompt)
+        assertFalse("2|" in prompt)
+    }
+
+    @Test
+    fun `day vocabulary picks recurring names over filler`() {
+        val texts = List(4) { "Then I told Marguerite about the Hendricks invoice, really" } + "yeah yeah okay"
+        val vocab = DayVocabulary.extract(texts)
+        assertTrue("Marguerite" in vocab)
+        assertTrue("Hendricks" in vocab)
+        assertFalse(vocab.any { it.equals("really", ignoreCase = true) })
+    }
+
+    @Test
+    fun `chunking keeps every line and picks evenly`() {
+        val lines = (1..50).map { ScopedLine(seg(it.toLong(), "x".repeat(100)), "x".repeat(100)) }
+        val chunks = lines.chunkedByChars(1_000)
+        assertEquals(50, chunks.sumOf { it.size })
+        assertTrue(chunks.all { it.charCount() <= 1_000 })
+        val picked = (1..10).toList().evenlyPick(4)
+        assertEquals(listOf(1, 4, 7, 10), picked)
+    }
+}

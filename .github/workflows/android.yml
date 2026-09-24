@@ -177,11 +177,17 @@ jobs:
         run: ./gradlew --no-daemon :app:assembleRelease
 
       - name: Collect and checksum artifacts
+        id: assets
         run: |
+          # Asset names come from gradle.properties, shared with the in-app updater, so each
+          # line of the app (stable, 2.1) publishes files that cannot be mistaken for the other.
+          PREFIX="$(grep '^recorder.releaseAssetPrefix=' gradle.properties | cut -d= -f2)"
+          test -n "$PREFIX"
           mkdir -p dist
-          cp app/build/outputs/apk/razr/release/*.apk dist/recorder-razr-release.apk
-          cp app/build/outputs/apk/standard/release/*.apk dist/recorder-standard-release.apk
+          cp app/build/outputs/apk/razr/release/*.apk "dist/$PREFIX-razr.apk"
+          cp app/build/outputs/apk/standard/release/*.apk "dist/$PREFIX-standard.apk"
           cd dist && sha256sum *.apk > SHA256SUMS && cat SHA256SUMS
+          echo "prefix=$PREFIX" >> "$GITHUB_OUTPUT"
 
       - name: Verify the APKs are actually signed
         run: |
@@ -195,8 +201,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/recorder-razr-release.apk
-            dist/recorder-standard-release.apk
+            dist/${{ steps.assets.outputs.prefix }}-razr.apk
+            dist/${{ steps.assets.outputs.prefix }}-standard.apk
             dist/SHA256SUMS
           generate_release_notes: true
           # Downloads are served from releases/latest/download/<asset>, so the install page

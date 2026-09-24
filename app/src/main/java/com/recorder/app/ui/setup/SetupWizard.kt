@@ -37,6 +37,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.recorder.app.models.InstallProgress
+import com.recorder.app.service.MicConflict
 import com.recorder.app.service.RecordingService
 
 /**
@@ -136,8 +137,11 @@ private fun PermissionsStep() {
     ) { result ->
         micGranted = result[Manifest.permission.RECORD_AUDIO] ?: micGranted
         notifGranted = result[Manifest.permission.POST_NOTIFICATIONS] ?: notifGranted
-        if (micGranted) RecordingService.start(context)
+        // Not if the other installed Recorder holds the mic: one of the two would record silence.
+        if (micGranted && MicConflict.warning(context) == null) RecordingService.start(context)
     }
+
+    val conflict = remember(micGranted) { MicConflict.warning(context) }
 
     Heading("Two permissions")
     Body("Microphone — so it can hear. Without this the app does nothing at all.")
@@ -167,6 +171,12 @@ private fun PermissionsStep() {
         TextButton(onClick = { context.openAppSettings() }) {
             Text("Denied by mistake? Open app settings")
         }
+    }
+
+    if (conflict != null) {
+        Body(conflict)
+        TextButton(onClick = { MicConflict.openOther(context) }) { Text("Open the other Recorder") }
+        TextButton(onClick = { RecordingService.start(context) }) { Text("I've stopped it — record here") }
     }
 }
 

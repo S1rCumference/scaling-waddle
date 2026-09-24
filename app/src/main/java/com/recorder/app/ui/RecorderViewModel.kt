@@ -29,17 +29,39 @@ import com.recorder.core.storage.Folder
 import com.recorder.core.storage.PendingAction
 import com.recorder.core.storage.PendingActionStatus
 import com.recorder.core.storage.TranscriptSegment
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Intent
+import com.recorder.app.correction.CorrectionRunner
+import com.recorder.app.export.ExportTarget
+import com.recorder.app.export.Exporter
+import com.recorder.app.service.MicConflict
+import com.recorder.core.llm.GroupAssistant
+import com.recorder.core.llm.ScopedLine
+import com.recorder.core.storage.DayKey
+import com.recorder.core.storage.DaySummary
+import com.recorder.core.storage.ExportDefaults
+import com.recorder.core.storage.HourSummary
+import com.recorder.core.storage.ModelChoice
+import com.recorder.core.storage.latestBySegment
+import java.util.TimeZone
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-
-data class ChatTurn(val question: String, val answer: String, val pending: Boolean = false)
 
 class RecorderViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -87,28 +109,279 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     val setupComplete: StateFlow<Boolean?> =
         settings.setupComplete.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    private val _chat = MutableStateFlow<List<ChatTurn>>(emptyList())
-    val chat: StateFlow<List<ChatTurn>> = _chat.asStateFlow()
-
     private val _status = MutableStateFlow<String?>(null)
     val status: StateFlow<String?> = _status.asStateFlow()
 
-    /** Answers questions with the on-device model only — this must work with the radio off. */
-    fun ask(question: String) {
+    // --- Shared screen state (the same object on the cover and the inner screen) ---
+
+    val tab: StateFlow<AppTab> = AppUiState.tab
+    val openGroup: StateFlow<GroupRef?> = AppUiState.openGroup
+    val textMode: StateFlow<TextMode> = AppUiState.textMode
+    val conversations: StateFlow<Map<String, List<ChatTurn>>> = AppUiState.conversations
+    val selection: StateFlow<Set<Long>> = AppUiState.selection
+    val micSilenced: StateFlow<Boolean> = RecordingService.micSilenced
+    val correctionProgress: StateFlow<String?> = CorrectionRunner.progress
+
+    // --- Groups: today by hour, earlier days by day ---
+
+    /** Ticks when the local day changes, so "today" rolls over at midnight. */
+    private val today: Flow<Int> = flow {
+        while (true) {
+            emit(DayKey.today())
+            delay(30_000)
+        }
+    }.distinctUntilChanged()
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val todayHours: StateFlow<List<HourSummary>> = today
+        .flatMapLatest { day ->
+            val offset = TimeZone.getDefault().getOffset(System.currentTimeMillis()).toLong()
+            db.transcripts().hourSummaries(DayKey.startOf(day), DayKey.endOf(day), offset)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val days: StateFlow<List<DaySummary>> =
+        db.transcripts().daySummaries().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Lines of the open group, each with its newest correction. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val groupLines: StateFlow<List<LineView>> = AppUiState.openGroup
+        .flatMapLatest { group ->
+            if (group == null || group.kind == GroupKind.ALL) {
+                flowOf(emptyList())
+            } else {
+                combine(
+                    db.transcripts().inRangeFlow(group.fromTs, group.toTs),
+                    db.corrections().inRangeFlow(group.fromTs, group.toTs),
+                ) { segments, corrections ->
+                    val latest = corrections.latestBySegment()
+                    segments.map { LineView(it, latest[it.id]) }
+                }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun selectTab(tab: AppTab) = AppUiState.selectTab(tab)
+
+    fun openGroup(group: GroupRef?) {
+        AppUiState.open(group)
+        if (group != null) AppUiState.selectTab(AppTab.LOGS)
+    }
+
+    fun setTextMode(mode: TextMode) = AppUiState.setMode(mode)
+
+    fun toggleSelected(id: Long) = AppUiState.toggleSelected(id)
+
+    fun clearSelection() {
+        AppUiState.selection.value = emptySet()
+    }
+
+    // --- Ask, scoped to a group ---
+
+    /** Answers a typed question about [group], or about everything for [GroupRef.ALL]. */
+    fun ask(group: GroupRef, question: String) {
         if (question.isBlank()) return
-        _chat.value = _chat.value + ChatTurn(question, "", pending = true)
-        viewModelScope.launch {
-            val assistant = TranscriptAssistant(
-                provider = ServiceLocator.providers.onDeviceSmallModel(),
-                rag = ServiceLocator.rag,
-            )
-            val answer = assistant.ask(question)
-            _chat.value = _chat.value.dropLast(1) + ChatTurn(question, answer.text)
+        runAction(group, question) { assistant, lines ->
+            if (group.kind == GroupKind.ALL) {
+                val answer = TranscriptAssistant(ServiceLocator.providers.askProvider().provider, ServiceLocator.rag)
+                    .ask(question)
+                ChatTurn(question, answer.text, sourceIds = answer.sources.map { it.id })
+            } else {
+                val answer = assistant.ask(question, lines, group.fromTs, group.toTs)
+                ChatTurn(question, answer.text, sourceIds = answer.sources.map { it.id })
+            }
         }
     }
 
-    fun clearChat() {
-        _chat.value = emptyList()
+    fun summarize(group: GroupRef) = runAction(group, "Summarise this") { assistant, lines ->
+        val answer = assistant.summarize(lines)
+        ChatTurn("Summarise this", answer.text, sourceIds = answer.sources.map { it.id })
+    }
+
+    fun actionItems(group: GroupRef) = runAction(group, "List action items and follow-ups") { assistant, lines ->
+        val answer = assistant.actionItems(lines)
+        ChatTurn("List action items and follow-ups", answer.text, sourceIds = answer.sources.map { it.id })
+    }
+
+    fun draftFollowUp(group: GroupRef, recipient: String) {
+        val label = "Draft a follow-up" + if (recipient.isBlank()) "" else " to $recipient"
+        runAction(group, label) { assistant, lines ->
+            val answer = assistant.draftFollowUp(lines, recipient)
+            ChatTurn(label, answer.text, sourceIds = answer.sources.map { it.id }, isDraft = true)
+        }
+    }
+
+    /** No model involved: every line that mentions the topic. */
+    fun find(group: GroupRef, topic: String) {
+        if (topic.isBlank()) return
+        val label = "Find: $topic"
+        viewModelScope.launch {
+            AppUiState.appendTurn(group.id, ChatTurn(label, "", pending = true))
+            val hits = if (group.kind == GroupKind.ALL) {
+                ServiceLocator.rag.retrieve(topic, limit = 60).sortedBy { it.startTs }
+                    .map { ScopedLine(it, it.text) }
+            } else {
+                GroupAssistant.find(topic, scopedLines(group))
+            }
+            val text = if (hits.isEmpty()) "Nothing in here mentions \"$topic\"."
+            else "${hits.size} lines:\n" + GroupAssistant.render(hits)
+            AppUiState.completeTurn(group.id, ChatTurn(label, text, sourceIds = hits.map { it.segment.id }))
+        }
+    }
+
+    /** Re-runs the correction pass over one group, now. */
+    fun recorrect(group: GroupRef) {
+        if (group.kind == GroupKind.ALL) return
+        val label = "Re-run correction"
+        viewModelScope.launch {
+            AppUiState.appendTurn(group.id, ChatTurn(label, "", pending = true))
+            val count = runCatching { CorrectionRunner.runRange(group.fromTs, group.toTs) }.getOrDefault(0)
+            val text = when {
+                count > 0 -> "Corrected $count lines. The newest correction is shown; the original is kept."
+                else -> "Nothing was corrected. " + (CorrectionRunner.lastError?.let { "Reason: $it" }
+                    ?: "The group may be empty.")
+            }
+            AppUiState.completeTurn(group.id, ChatTurn(label, text))
+        }
+    }
+
+    /** Flags the lines an answer was drawn from, labelled with the question. */
+    fun flagSources(turn: ChatTurn) = viewModelScope.launch {
+        if (turn.sourceIds.isEmpty()) return@launch
+        val keyword = "asked: " + turn.question.take(60)
+        db.flagged().insertAll(turn.sourceIds.take(20).map { FlaggedItem(segmentId = it, keyword = keyword) })
+        _status.value = "Flagged ${turn.sourceIds.take(20).size} lines"
+    }
+
+    fun copy(text: String) {
+        val context = getApplication<Application>()
+        context.getSystemService(ClipboardManager::class.java)
+            ?.setPrimaryClip(ClipData.newPlainText("Recorder", text))
+        _status.value = "Copied"
+    }
+
+    /** Hands text to the share sheet. The user picks the app and presses send themselves. */
+    fun shareText(text: String) {
+        val context = getApplication<Application>()
+        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+        context.startActivity(Intent.createChooser(send, "Share").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    fun clearConversation(group: GroupRef) = AppUiState.clearConversation(group.id)
+
+    suspend fun segmentsByIds(ids: List<Long>): Map<Long, TranscriptSegment> =
+        ids.distinct().chunked(900).flatMap { db.transcripts().byIds(it) }.associateBy { it.id }
+
+    private fun runAction(
+        group: GroupRef,
+        label: String,
+        block: suspend (GroupAssistant, List<ScopedLine>) -> ChatTurn,
+    ) {
+        viewModelScope.launch {
+            AppUiState.appendTurn(group.id, ChatTurn(label, "", pending = true))
+            val turn = runCatching {
+                val chosen = ServiceLocator.providers.askProvider()
+                val assistant = if (chosen.cloud) {
+                    GroupAssistant(chosen.provider, db.transcripts(), GroupAssistant.CLOUD_CHUNK_CHARS, GroupAssistant.CLOUD_MAX_CHUNKS)
+                } else {
+                    GroupAssistant(chosen.provider, db.transcripts())
+                }
+                block(assistant, if (group.kind == GroupKind.ALL) emptyList() else scopedLines(group))
+            }.getOrElse { error ->
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                ChatTurn(label, "Something went wrong: ${error.message}")
+            }
+            AppUiState.completeTurn(group.id, turn)
+        }
+    }
+
+    /** The group's lines as the assistant should read them: corrected where available. */
+    private suspend fun scopedLines(group: GroupRef): List<ScopedLine> =
+        Exporter.linesFor(group.fromTs, group.toTs).map { ScopedLine(it.segment, it.corrected) }
+
+    // --- Export ---
+
+    val exportContent: StateFlow<String> =
+        settings.exportContent.stateIn(viewModelScope, SharingStarted.Eagerly, ExportDefaults.CONTENT_CORRECTED)
+    val exportFormat: StateFlow<String> =
+        settings.exportFormat.stateIn(viewModelScope, SharingStarted.Eagerly, ExportDefaults.FORMAT_MARKDOWN)
+
+    /** Exports a group, a range, or — when [onlyIds] is given — just those lines. */
+    fun export(
+        title: String,
+        fromTs: Long,
+        toTs: Long,
+        onlyIds: Set<Long>?,
+        content: String,
+        format: String,
+        target: ExportTarget,
+    ) = viewModelScope.launch {
+        val lines = if (onlyIds.isNullOrEmpty()) Exporter.linesFor(fromTs, toTs) else Exporter.linesForIds(onlyIds)
+        _status.value = Exporter.export(getApplication(), title, lines, content, format, target)
+            .fold(onSuccess = { it }, onFailure = { "Export failed: ${it.message}" })
+    }
+
+    // --- Two versions side by side ---
+
+    private val _micWarning = MutableStateFlow<String?>(null)
+
+    /** Set when another installed Recorder appears to hold the microphone. */
+    val micWarning: StateFlow<String?> = _micWarning.asStateFlow()
+
+    fun checkMicConflict(): Boolean {
+        _micWarning.value = MicConflict.warning(getApplication())
+        return _micWarning.value != null
+    }
+
+    fun dismissMicWarning() {
+        _micWarning.value = null
+    }
+
+    fun openOtherRecorder() {
+        if (!MicConflict.openOther(getApplication())) _status.value = "Could not open the other Recorder."
+    }
+
+    // --- Model and correction settings ---
+
+    val correctionEnabled = settings.correctionEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val correctionInterval = settings.correctionIntervalMin.stateIn(viewModelScope, SharingStarted.Eagerly, 15)
+    val correctionIntervalCharging =
+        settings.correctionIntervalChargingMin.stateIn(viewModelScope, SharingStarted.Eagerly, 3)
+    val endOfDayEnabled = settings.endOfDayEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val correctionEngine = settings.correctionEngine.stateIn(viewModelScope, SharingStarted.Eagerly, ModelChoice.LOCAL)
+    val correctionModel = settings.correctionModel.stateIn(viewModelScope, SharingStarted.Eagerly, ModelChoice.AUTO)
+    val askModel = settings.askModel.stateIn(viewModelScope, SharingStarted.Eagerly, ModelChoice.AUTO)
+
+    fun setCorrectionEnabled(on: Boolean) = viewModelScope.launch { settings.setCorrectionEnabled(on) }
+    fun setCorrectionIntervals(battery: Int, charging: Int) =
+        viewModelScope.launch { settings.setCorrectionIntervals(battery, charging) }
+    fun setEndOfDayEnabled(on: Boolean) = viewModelScope.launch { settings.setEndOfDayEnabled(on) }
+    fun setCorrectionEngine(engine: String) = viewModelScope.launch { settings.setCorrectionEngine(engine) }
+    fun setCorrectionModel(choice: String) = viewModelScope.launch { settings.setCorrectionModel(choice) }
+    fun setAskModel(choice: String) = viewModelScope.launch { settings.setAskModel(choice) }
+    fun setExportDefaults(content: String, format: String) =
+        viewModelScope.launch { settings.setExportDefaults(content, format) }
+
+    /** Installed local models, strongest first, as (file name, label) for the switchers. */
+    fun installedModels(): List<Pair<String, String>> =
+        LocalModelSelector(getApplication()).allCandidates().filter { it.exists }.map { it.fileName to it.label }
+
+    /** What each model role would use right now, in words. */
+    fun modelSummary(): String {
+        val context = getApplication<Application>()
+        val selector = LocalModelSelector(context)
+        val strongest = selector.selectStrongest()?.label ?: "none fits right now"
+        val small = selector.selectSmallModel()?.label ?: "none fits right now"
+        return "Strongest local model that fits now: $strongest\n" +
+            "Chat model that fits now: $small\n" +
+            "RAM tier: ${DeviceCapabilities.ramTier(context)} (${DeviceCapabilities.marketedRamGb(context)} GB)"
+    }
+
+    fun correctNow() = viewModelScope.launch {
+        _status.value = "Correcting new lines…"
+        val count = runCatching { CorrectionRunner.runBatch(drain = true) }.getOrDefault(0)
+        _status.value = if (count > 0) "Corrected $count lines" else
+            "Nothing corrected" + (CorrectionRunner.lastError?.let { ": $it" } ?: " — no new lines.")
     }
 
     fun setRecording(enabled: Boolean) {

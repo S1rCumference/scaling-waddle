@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 
 data class AvailableUpdate(
@@ -41,48 +42,51 @@ class UpdateChecker(private val context: Context) {
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    /** Returns the newer release, or null when this build is current. */
+    /**
+     * Returns the newest release that carries this build's APK, or null when this build is
+     * current. Every recent release is looked at, not just "latest": the stable app and 2.1
+     * publish to the same repository under different asset names, so the release GitHub
+     * calls latest may not contain this app at all.
+     */
     suspend fun check(): Result<AvailableUpdate?> = withContext(Dispatchers.IO) {
         runCatching {
             val request = Request.Builder()
-                .url(LATEST_RELEASE_API)
+                .url(RELEASES_API)
                 .header("Accept", "application/vnd.github+json")
                 .build()
 
-            val body = client.newCall(request).execute().use { response ->
+            val releases = client.newCall(request).execute().use { response ->
                 val text = response.body?.string().orEmpty()
                 if (!response.isSuccessful) error("GitHub returned HTTP ${response.code}")
-                JSONObject(text)
+                JSONArray(text)
             }
 
-            val tag = body.optString("tag_name").removePrefix("v")
-            if (tag.isBlank()) return@runCatching null
+            var best: AvailableUpdate? = null
+            for (r in 0 until releases.length()) {
+                val release = releases.optJSONObject(r) ?: continue
+                if (release.optBoolean("draft") || release.optBoolean("prerelease")) continue
+                val tag = release.optString("tag_name").removePrefix("v")
+                if (tag.isBlank()) continue
+                val code = versionCodeOf(tag)
+                if (code <= BuildConfig.VERSION_CODE || code <= (best?.versionCode ?: 0)) continue
 
-            val remoteCode = versionCodeOf(tag)
-            if (remoteCode <= BuildConfig.VERSION_CODE) {
-                Log.i(TAG, "already current: local ${BuildConfig.VERSION_CODE}, remote $remoteCode")
-                return@runCatching null
-            }
-
-            val assets = body.optJSONArray("assets") ?: error("release has no assets")
-            var apkUrl: String? = null
-            var size = 0L
-            for (i in 0 until assets.length()) {
-                val asset = assets.optJSONObject(i) ?: continue
-                if (asset.optString("name") == apkAssetName()) {
-                    apkUrl = asset.optString("browser_download_url")
-                    size = asset.optLong("size")
+                val assets = release.optJSONArray("assets") ?: continue
+                for (i in 0 until assets.length()) {
+                    val asset = assets.optJSONObject(i) ?: continue
+                    if (asset.optString("name") == apkAssetName()) {
+                        best = AvailableUpdate(
+                            versionName = tag,
+                            versionCode = code,
+                            apkUrl = asset.optString("browser_download_url"),
+                            sizeBytes = asset.optLong("size"),
+                            sha256 = null,
+                            notes = release.optString("body").take(500),
+                        )
+                    }
                 }
             }
-
-            AvailableUpdate(
-                versionName = tag,
-                versionCode = remoteCode,
-                apkUrl = apkUrl ?: error("release has no ${apkAssetName()}"),
-                sizeBytes = size,
-                sha256 = null,
-                notes = body.optString("body").take(500),
-            )
+            if (best == null) Log.i(TAG, "no newer release carries ${apkAssetName()}")
+            best
         }
     }
 
@@ -157,11 +161,7 @@ class UpdateChecker(private val context: Context) {
 
     /** The razr build and the standard build are separate assets and separate app ids. */
     private fun apkAssetName(): String =
-        if (BuildConfig.COVER_UI_ENABLED) {
-            "recorder-razr-release.apk"
-        } else {
-            "recorder-standard-release.apk"
-        }
+        "${BuildConfig.RELEASE_ASSET_PREFIX}-${if (BuildConfig.COVER_UI_ENABLED) "razr" else "standard"}.apk"
 
     private fun File.sha256(): String {
         val digest = MessageDigest.getInstance("SHA-256")
@@ -178,7 +178,7 @@ class UpdateChecker(private val context: Context) {
 
     private companion object {
         const val TAG = "UpdateChecker"
-        const val LATEST_RELEASE_API =
-            "https://api.github.com/repos/S1rCumference/scaling-waddle/releases/latest"
+        const val RELEASES_API =
+            "https://api.github.com/repos/S1rCumference/scaling-waddle/releases?per_page=20"
     }
 }

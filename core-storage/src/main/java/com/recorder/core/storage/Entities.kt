@@ -15,17 +15,75 @@ object SegmentSource {
 
 @Entity(
     tableName = "transcript_segments",
-    indices = [Index("start_ts"), Index("folder_id"), Index("heavy_processed")],
+    indices = [Index("start_ts"), Index("folder_id"), Index("heavy_processed"), Index("day_key")],
 )
 data class TranscriptSegment(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     @ColumnInfo(name = "start_ts") val startTs: Long,
     @ColumnInfo(name = "end_ts") val endTs: Long,
+    /** Exactly what speech recognition produced. Never rewritten; corrections live beside it. */
     @ColumnInfo(name = "text") val text: String,
     @ColumnInfo(name = "source") val source: String = SegmentSource.MIC,
     @ColumnInfo(name = "folder_id") val folderId: Long? = null,
     /** False until the Phase 4 heavy tier has looked at this row. */
     @ColumnInfo(name = "heavy_processed") val heavyProcessed: Boolean = false,
+    /**
+     * Local calendar day the segment was spoken on, as yyyymmdd. Stamped at write time so
+     * grouping by day is an indexed GROUP BY rather than timezone arithmetic in SQL, and so
+     * a day stays the day it was spoken even if the phone later changes timezone.
+     */
+    @ColumnInfo(name = "day_key", defaultValue = "0") val dayKey: Int = DayKey.of(startTs),
+)
+
+/** Which pass produced a correction. Strings, so new passes need no migration. */
+object CorrectionPass {
+    /** The small rolling batches that run every few minutes behind recording. */
+    const val BATCH = "batch"
+
+    /** The overnight re-run over a whole day, with the whole day as context. */
+    const val END_OF_DAY = "end_of_day"
+
+    /** Asked for by hand on one group. */
+    const val MANUAL = "manual"
+
+    fun label(pass: String): String = when (pass) {
+        BATCH -> "live batch"
+        END_OF_DAY -> "end-of-day pass"
+        MANUAL -> "re-run by hand"
+        else -> pass
+    }
+}
+
+/**
+ * One corrected version of one segment. Append-only: a later pass adds a row rather than
+ * editing an earlier one, and the original text in [TranscriptSegment] is never touched.
+ * The newest row for a segment is the one shown.
+ */
+@Entity(
+    tableName = "segment_corrections",
+    indices = [Index("segment_id"), Index("created_ts")],
+)
+data class SegmentCorrection(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "segment_id") val segmentId: Long,
+    @ColumnInfo(name = "text") val text: String,
+    @ColumnInfo(name = "pass") val pass: String,
+    /** Human-readable name of the model that produced it, e.g. "Qwen 3 4B (on this phone)". */
+    @ColumnInfo(name = "engine") val engine: String,
+    @ColumnInfo(name = "created_ts") val createdTs: Long = System.currentTimeMillis(),
+) {
+    /** True when the pass looked at the segment and left it as it was. */
+    fun unchangedFrom(original: String): Boolean = text.trim() == original.trim()
+}
+
+/** Bookkeeping for the end-of-day pass, so a day is only re-run when it has new speech. */
+@Entity(tableName = "day_passes")
+data class DayPass(
+    @PrimaryKey @ColumnInfo(name = "day_key") val dayKey: Int,
+    /** Start of the newest segment the last run covered. */
+    @ColumnInfo(name = "covered_until_ts") val coveredUntilTs: Long,
+    @ColumnInfo(name = "completed_ts") val completedTs: Long,
+    @ColumnInfo(name = "engine") val engine: String,
 )
 
 /**

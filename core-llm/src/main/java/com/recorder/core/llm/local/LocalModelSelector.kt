@@ -4,6 +4,17 @@ import android.content.Context
 import android.util.Log
 import java.io.File
 
+/**
+ * What a caller wants loaded. [Auto] picks from RAM tier and free memory; [Strongest] prefers
+ * the heavy model and falls back to the best chat model; [File] is a choice made in Settings.
+ */
+sealed interface LocalModelChoice {
+    data object Small : LocalModelChoice
+    data object Heavy : LocalModelChoice
+    data object Strongest : LocalModelChoice
+    data class File(val fileName: String) : LocalModelChoice
+}
+
 /** One candidate GGUF, with the headroom it needs beyond the ASR pipeline already resident. */
 data class LocalModelSpec(
     val label: String,
@@ -76,6 +87,38 @@ class LocalModelSelector(private val context: Context) {
         val free = DeviceCapabilities.availableRamMb(context)
         return candidate.takeIf { it.exists && free >= it.requiredFreeMb }
     }
+
+    /**
+     * The strongest model this phone can hold beside recording right now: the heavy model if
+     * the RAM tier allows it and there is room, otherwise the best chat model that fits.
+     */
+    fun selectStrongest(): LocalModelSpec? = selectHeavyModel() ?: selectSmallModel()
+
+    /** Every model this build knows about, in order of strength, for the Settings switchers. */
+    fun allCandidates(): List<LocalModelSpec> =
+        listOfNotNull(heavyModelCandidate()) + smallModelCandidates()
+
+    /** A specific model, if it is installed and fits in memory now. */
+    fun selectFile(fileName: String): LocalModelSpec? {
+        if (!LocalModelRuntime.available || DeviceCapabilities.isLowMemory(context)) return null
+        val dir = LocalModelRuntime.modelDir(context)
+        val known = (smallModelCandidates() + listOfNotNull(heavyModelCandidate()) + allHeavySpecs(dir))
+            .firstOrNull { it.fileName == fileName } ?: return null
+        val free = DeviceCapabilities.availableRamMb(context)
+        return known.takeIf { it.exists && free >= it.requiredFreeMb }
+    }
+
+    fun select(choice: LocalModelChoice): LocalModelSpec? = when (choice) {
+        LocalModelChoice.Small -> selectSmallModel()
+        LocalModelChoice.Heavy -> selectHeavyModel()
+        LocalModelChoice.Strongest -> selectStrongest()
+        is LocalModelChoice.File -> selectFile(choice.fileName)
+    }
+
+    private fun allHeavySpecs(dir: File) = listOf(
+        spec("Qwen 3 4B (Q4_K_M)", "qwen3-4b-q4.gguf", 3_400, dir),
+        spec("Qwen 3 8B (Q4_K_M)", "qwen3-8b-q4.gguf", 6_600, dir),
+    )
 
     /** Why the heavy tier is off, phrased for the settings screen. */
     fun heavyUnavailableReason(): String? = when {

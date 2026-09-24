@@ -22,14 +22,22 @@ android {
     compileSdk = rootProject.extra["compileSdkVersion"] as Int
 
     defaultConfig {
-        applicationId = "com.recorder.app"
+        // ".v21" so 2.1 installs next to the stable app instead of replacing it. The code
+        // namespace stays com.recorder.app; only the installed identity differs.
+        applicationId = "com.recorder.app.v21"
         minSdk = rootProject.extra["minSdkVersion"] as Int
         targetSdk = rootProject.extra["targetSdkVersion"] as Int
 
         // Derived from the git tag in CI (see .github/workflows/android.yml) so the
         // in-app updater can compare versions meaningfully.
         versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
-        versionName = System.getenv("VERSION_NAME") ?: "0.1.0-dev"
+        versionName = System.getenv("VERSION_NAME") ?: "2.1.0-dev"
+
+        buildConfigField(
+            "String",
+            "RELEASE_ASSET_PREFIX",
+            "\"${project.property("recorder.releaseAssetPrefix")}\"",
+        )
 
         ndk {
             abiFilters += rootProject.extra["ndkAbi"] as String

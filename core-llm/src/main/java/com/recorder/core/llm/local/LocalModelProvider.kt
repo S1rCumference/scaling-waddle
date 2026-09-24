@@ -26,9 +26,16 @@ import kotlinx.coroutines.launch
  */
 class LocalModelProvider(
     private val context: Context,
-    private val heavy: Boolean,
+    private val choice: LocalModelChoice,
     override val id: String = ProviderIds.LOCAL_ON_DEVICE,
+    /** Upper bound on generated tokens per call; corrections need more than a chat answer. */
+    private val maxTokens: Int = 512,
 ) : LlmProvider {
+
+    constructor(context: Context, heavy: Boolean) :
+        this(context, if (heavy) LocalModelChoice.Heavy else LocalModelChoice.Small)
+
+    private val heavy: Boolean get() = choice == LocalModelChoice.Heavy
 
     private val selector = LocalModelSelector(context)
 
@@ -43,24 +50,29 @@ class LocalModelProvider(
     val modelLabel: String? get() = LocalModelRuntime.current
 
     override suspend fun complete(messages: List<ChatMessage>, tools: List<ToolSpec>): LlmResponse {
-        val spec = (if (heavy) selector.selectHeavyModel() else selector.selectSmallModel())
+        val spec = selector.select(choice)
             ?: return LlmResponse.unavailable(unavailableReason())
-
-        val model = LocalModelRuntime.load(context, spec)
-            ?: return LlmResponse.unavailable("Model runtime failed to load ${spec.fileName}.")
 
         // Local models here summarise and file transcripts rather than call tools, so tool
         // specs are ignored outright instead of being half-supported.
         return runCatching {
-            LlmResponse(
-                text = model.generate(
-                    prompt = messages.userContent(),
-                    systemPrompt = messages.systemContent(),
-                ).trim(),
-            )
-        }.getOrElse { LlmResponse.failed(it.message ?: "local inference failed") }
-            .also { scheduleIdleUnload() }
+            LocalModelRuntime.withModel(context, spec) { model ->
+                LlmResponse(
+                    text = model.generate(
+                        prompt = messages.userContent(),
+                        systemPrompt = messages.systemContent(),
+                        maxTokens = maxTokens,
+                    ).trim(),
+                )
+            } ?: LlmResponse.unavailable("Model runtime failed to load ${spec.fileName}.")
+        }.getOrElse { error ->
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            LlmResponse.failed(error.message ?: "local inference failed")
+        }.also { scheduleIdleUnload() }
     }
+
+    /** The label of the model this provider would load right now, for "corrected by …". */
+    fun plannedModelLabel(): String? = selector.select(choice)?.label
 
     /** Frees the weights. Called when the app goes idle so the model is not resident all day. */
     suspend fun unload() {
@@ -84,8 +96,12 @@ class LocalModelProvider(
                 !LocalModelRuntime.available ->
                     "Local AI unavailable: ${LocalModelRuntime.unavailableReason}."
 
-                selector.smallModelCandidates().none { it.exists } ->
+                selector.allCandidates().none { it.exists } ->
                     "No local model installed yet. Finish setup to download one."
+
+                choice is LocalModelChoice.File && selector.allCandidates()
+                    .none { it.fileName == choice.fileName && it.exists } ->
+                    "The model chosen in Settings (${choice.fileName}) is not installed."
 
                 else -> "Not enough free memory to load a local model right now."
             }

@@ -3,7 +3,9 @@ package com.recorder.app
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import com.recorder.app.correction.EndOfDayWorker
 import com.recorder.app.service.RecordingService
+import com.recorder.app.ui.AppUiState
 import com.recorder.app.service.ResumeNotifier
 import com.recorder.app.work.FolderFilingWorker
 import com.recorder.app.work.HeavySyncScheduler
@@ -15,9 +17,11 @@ class RecorderApplication : Application() {
         super.onCreate()
         createNotificationChannels()
         ServiceLocator.init(this)
+        AppUiState.init(this)
         HeavySyncScheduler.ensureScheduled(this)
         RecordingWatchdog.ensureScheduled(this)
         FolderFilingWorker.ensureScheduled(this)
+        EndOfDayWorker.ensureScheduled(this)
     }
 
     private fun createNotificationChannels() {

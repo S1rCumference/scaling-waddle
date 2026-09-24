@@ -21,10 +21,27 @@ DIST="${1:-}"
 OUT="_site"
 rm -rf "$OUT" && mkdir -p "$OUT"
 
-BASE="https://github.com/$OWNER/$REPO/releases/latest/download"
-RAZR_URL="$BASE/recorder-razr-release.apk"
-STANDARD_URL="$BASE/recorder-standard-release.apk"
+# This line of the app (2.1) and its asset names, shared with CI and the in-app updater.
+PREFIX="$(grep '^recorder.releaseAssetPrefix=' gradle.properties | cut -d= -f2)"
+APP_ID="$(grep -oE 'applicationId = "[^"]+"' app/build.gradle.kts | head -1 | cut -d'"' -f2)"
+
+# Links are pinned to tags, not releases/latest: two lines of the app publish to the same
+# repository, and "latest" can only ever point at one of them.
+case "$VERSION" in
+  v[0-9]*) BASE="https://github.com/$OWNER/$REPO/releases/download/$VERSION" ;;
+  *)       BASE="https://github.com/$OWNER/$REPO/releases/latest/download" ;;
+esac
+RAZR_URL="$BASE/$PREFIX-razr.apk"
+STANDARD_URL="$BASE/$PREFIX-standard.apk"
 CHECKSUMS_URL="$BASE/SHA256SUMS"
+
+# The stable build stays on offer beside 2.1, from its own release.
+STABLE_TAG="${STABLE_TAG:-v0.2.0}"
+STABLE_BASE="https://github.com/$OWNER/$REPO/releases/download/$STABLE_TAG"
+STABLE_RAZR_URL="$STABLE_BASE/recorder-razr-release.apk"
+STABLE_STANDARD_URL="$STABLE_BASE/recorder-standard-release.apk"
+STABLE_RAZR_SHA="$(curl -fsSL "$STABLE_BASE/SHA256SUMS" 2>/dev/null | awk '/recorder-razr-release.apk/ {print $1}' || true)"
+STABLE_RAZR_SHA="${STABLE_RAZR_SHA:-See SHA256SUMS on the $STABLE_TAG release.}"
 
 human_size() {
   local bytes="$1"
@@ -40,8 +57,8 @@ QR_SECTION=""
 if [ -n "$DIST" ] && [ -d "$DIST" ]; then
   echo "Rendering with release artifacts from $DIST"
 
-  razr_apk="$DIST/recorder-razr-release.apk"
-  std_apk="$DIST/recorder-standard-release.apk"
+  razr_apk="$DIST/$PREFIX-razr.apk"
+  std_apk="$DIST/$PREFIX-standard.apk"
 
   [ -f "$razr_apk" ] && RAZR_SIZE="$(human_size "$(stat -c%s "$razr_apk")")"
   [ -f "$std_apk" ] && STANDARD_SIZE="$(human_size "$(stat -c%s "$std_apk")")"
@@ -73,7 +90,7 @@ PY
 
       cat > "$OUT/provisioning.json" <<JSON
 {
-  "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": "com.recorder.app/com.recorder.app.admin.RecorderDeviceAdminReceiver",
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": "$APP_ID/com.recorder.app.admin.RecorderDeviceAdminReceiver",
   "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": "$RAZR_URL",
   "android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM": "$CERT_B64URL",
   "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": true,
@@ -153,12 +170,17 @@ replacements = {
     "__REPO__": """$REPO""",
     "__COMMIT__": """${COMMIT:0:12}""",
     "__QR_SECTION__": '''$QR_SECTION''',
+    "__ASSET_PREFIX__": """$PREFIX""",
+    "__STABLE_RAZR_URL__": """$STABLE_RAZR_URL""",
+    "__STABLE_STANDARD_URL__": """$STABLE_STANDARD_URL""",
+    "__STABLE_VERSION__": """$STABLE_TAG""",
+    "__STABLE_RAZR_SHA__": """$STABLE_RAZR_SHA""",
 }
 for key, value in replacements.items():
     html = html.replace(key, value)
 
 missing = [line for line in html.splitlines() if "__" in line and "_site" not in line]
-if any("__" + t + "__" in html for t in ["RAZR_URL", "STANDARD_URL", "QR_SECTION", "VERSION"]):
+if any("__" + t + "__" in html for t in ["RAZR_URL", "STANDARD_URL", "QR_SECTION", "VERSION", "STABLE_RAZR_URL", "ASSET_PREFIX"]):
     raise SystemExit("a placeholder was left unreplaced")
 
 pathlib.Path("$OUT/index.html").write_text(html)

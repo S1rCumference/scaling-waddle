@@ -119,7 +119,22 @@ object LocalModelRuntime {
         }
 
     /** Frees the resident model. Called when the app goes idle, and before loading another. */
-    suspend fun unload() = lock.withLock { evict() }
+    suspend fun unload() = usage.withLock { lock.withLock { evict() } }
+
+    /**
+     * Held for the whole of one load-and-generate, so a question on the cover screen cannot
+     * evict the model halfway through a correction batch (or the reverse). Without it the
+     * second caller's load would unload the weights mid-generation, and the first caller
+     * would get truncated text back that looks like a real answer.
+     */
+    private val usage = Mutex()
+
+    /** Loads [model] if needed and runs [block] with exclusive use of it. Null if it can't load. */
+    suspend fun <T> withModel(context: Context, model: LocalModelSpec, block: suspend (LocalLlm) -> T): T? =
+        usage.withLock {
+            val llm = load(context, model) ?: return@withLock null
+            block(llm)
+        }
 
     private fun evict() {
         resident?.let {
