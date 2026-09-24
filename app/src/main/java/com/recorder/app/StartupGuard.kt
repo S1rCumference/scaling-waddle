@@ -64,7 +64,7 @@ object StartupGuard {
                     "automatically and no model will be loaded. Settings -> Models has the repair.",
             )
 
-            marks > 0 -> Diagnostics.w(
+            before > 0 -> Diagnostics.w(
                 TAG,
                 "the previous start did not survive long enough to be called healthy",
             )
