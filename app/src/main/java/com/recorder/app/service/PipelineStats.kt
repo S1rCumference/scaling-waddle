@@ -21,6 +21,8 @@ class PipelineStats {
     @Volatile private var speechFrames = 0L
     @Volatile private var segments = 0L
     @Volatile private var transcribed = 0L
+    @Volatile private var segmentAudioMs = 0L
+    @Volatile private var decodeTimeMs = 0L
     @Volatile private var peak = 0f
     @Volatile private var bestProbability = 0f
 
@@ -36,8 +38,15 @@ class PipelineStats {
         if (speaking) speechFrames++
     }
 
-    fun onSegment(hadText: Boolean) {
+    /**
+     * One finished segment: how long the speech was, how long decoding it took, and whether
+     * it produced anything. The ratio of those two is what says "the speech model is slow"
+     * rather than leaving it as a guess.
+     */
+    fun onSegment(audioMs: Long, decodeMs: Long, hadText: Boolean) {
         segments++
+        segmentAudioMs += audioMs
+        decodeTimeMs += decodeMs
         if (hadText) transcribed++
     }
 
@@ -49,12 +58,16 @@ class PipelineStats {
         val speech = speechFrames
         val segs = segments
         val text = transcribed
+        val audioMs = segmentAudioMs
+        val decodeMs = decodeTimeMs
         frames = 0
         peak = 0f
         bestProbability = 0f
         speechFrames = 0
         segments = 0
         transcribed = 0
+        segmentAudioMs = 0
+        decodeTimeMs = 0
 
         if (f == 0L) {
             Diagnostics.w(tag, "no audio reached the recorder in the last minute")
@@ -67,7 +80,13 @@ class PipelineStats {
             tag,
             "last minute: ${seconds}s of audio, loudest ${level}% of full scale, " +
                 "detector best ${"%.2f".format(windowBest)}, $speech speech frames, " +
-                "$segs segment(s), $text transcribed",
+                "$segs segment(s), $text transcribed" +
+                if (segs > 0L) {
+                    ", ${audioMs / 1000}s of speech decoded in ${decodeMs / 1000}s " +
+                        "(${"%.1f".format(if (audioMs > 0) decodeMs.toDouble() / audioMs else 0.0)}x)"
+                } else {
+                    ""
+                },
         )
 
         // The three diagnoses worth spelling out, so the log answers the question directly.
@@ -87,8 +106,10 @@ class PipelineStats {
 
             segs > 0L && text == 0L -> Diagnostics.w(
                 tag,
-                "speech was detected but produced no text — the speech model is missing or " +
-                    "failing to decode.",
+                "speech was detected but produced no text. $segs segment(s) went to the " +
+                    "speech model and all came back empty. If the segments are long " +
+                    "(${if (segs > 0) audioMs / segs / 1000 else 0}s each here) the detector is " +
+                    "cutting on background noise rather than on speech.",
             )
         }
         return true

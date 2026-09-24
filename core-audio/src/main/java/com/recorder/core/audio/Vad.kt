@@ -37,6 +37,33 @@ class SileroVad private constructor(
     private val layout: Layout,
 ) : VoiceActivityDetector {
 
+    /**
+     * Outputs are read by name, never by position.
+     *
+     * Reading `result[0]` assumed the model lists its speech probability first. On a real
+     * phone Silero scored 0.001 on every frame of every recording, in a quiet room and in a
+     * car, which is not what a conservative detector looks like — it is what reading the
+     * wrong tensor looks like. A first element taken out of the recurrent state is a small
+     * number near zero, every time, and the state was then being overwritten with the
+     * probability, so it could never recover either.
+     */
+    private val stateOutput: String? =
+        session.outputNames.firstOrNull { it.contains("state", ignoreCase = true) || it == "stateN" }
+
+    private val hOutput: String? = session.outputNames.firstOrNull { it.equals("hn", true) || it == "h" }
+    private val cOutput: String? = session.outputNames.firstOrNull { it.equals("cn", true) || it == "c" }
+
+    private val probabilityOutput: String =
+        session.outputNames.firstOrNull { it == "output" }
+            ?: session.outputNames.firstOrNull { it != stateOutput && it != hOutput && it != cOutput }
+            ?: session.outputNames.first()
+
+    /** What this model actually declares, for the diagnostics screen. */
+    val layoutSummary: String
+        get() = "inputs ${session.inputNames.joinToString(",")} → " +
+            "outputs ${session.outputNames.joinToString(",")} " +
+            "(probability from \"$probabilityOutput\", state from \"${stateOutput ?: hOutput}\")"
+
     /** Silero v5 carries one packed `state` tensor; v4 carries separate `h` and `c`. */
     private enum class Layout { V5_STATE, V4_HC }
 
@@ -68,12 +95,14 @@ class SileroVad private constructor(
             }
 
             session.run(inputs).use { result ->
-                val probability = (result[0].value as Array<*>).firstProbability()
+                val probability = result.value(probabilityOutput).firstProbability()
                 when (layout) {
-                    Layout.V5_STATE -> state = (result[1].value as Array<*>).flattenFloats(state.size)
+                    Layout.V5_STATE ->
+                        stateOutput?.let { state = result.value(it).flattenFloats(state.size) }
+
                     Layout.V4_HC -> {
-                        h = (result[1].value as Array<*>).flattenFloats(h.size)
-                        c = (result[2].value as Array<*>).flattenFloats(c.size)
+                        hOutput?.let { h = result.value(it).flattenFloats(h.size) }
+                        cOutput?.let { c = result.value(it).flattenFloats(c.size) }
                     }
                 }
                 probability
@@ -109,21 +138,19 @@ class SileroVad private constructor(
                 }
                 val session = env.createSession(modelFile.absolutePath, options)
                 val layout = if (session.inputNames.contains("state")) Layout.V5_STATE else Layout.V4_HC
-                SileroVad(env, session, layout)
+                SileroVad(env, session, layout).also {
+                    Log.i(TAG, "Silero loaded: ${it.layoutSummary}")
+                }
             }.onFailure { Log.w(TAG, "Failed to load Silero model", it) }.getOrNull()
         }
 
-        private fun Array<*>.firstProbability(): Float {
-            val row = this.firstOrNull() ?: return 0f
-            return when (row) {
-                is FloatArray -> row.firstOrNull() ?: 0f
-                is Array<*> -> (row.firstOrNull() as? FloatArray)?.firstOrNull() ?: 0f
-                is Float -> row
-                else -> 0f
-            }
-        }
+        /** One output by name. Throws rather than guessing, so a wrong name is visible. */
+        private fun OrtSession.Result.value(name: String): Any =
+            get(name).orElseThrow { IllegalStateException("model has no output named \"$name\"") }.value
 
-        private fun Array<*>.flattenFloats(expected: Int): FloatArray {
+        private fun Any?.firstProbability(): Float = (this as? Array<*>)?.firstProbabilityImpl() ?: 0f
+
+        private fun Any?.flattenFloats(expected: Int): FloatArray {
             val out = FloatArray(expected)
             var i = 0
             fun walk(node: Any?) {
@@ -136,6 +163,17 @@ class SileroVad private constructor(
             walk(this)
             return out
         }
+
+        private fun Array<*>.firstProbabilityImpl(): Float {
+            val row = this.firstOrNull() ?: return 0f
+            return when (row) {
+                is FloatArray -> row.firstOrNull() ?: 0f
+                is Array<*> -> (row.firstOrNull() as? FloatArray)?.firstOrNull() ?: 0f
+                is Float -> row
+                else -> 0f
+            }
+        }
+
     }
 }
 

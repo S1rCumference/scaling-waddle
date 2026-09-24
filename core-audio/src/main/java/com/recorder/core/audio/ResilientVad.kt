@@ -106,7 +106,10 @@ class ResilientVad(
             return probability
         }
 
-        if (longestLoudRun >= LOUD_RUN_BEFORE_SWITCH && bestProbability < NEVER_CLOSE) {
+        if (auditedFrames >= MIN_AUDIT_FRAMES &&
+            longestLoudRun >= LOUD_RUN_BEFORE_SWITCH &&
+            bestProbability < NEVER_CLOSE
+        ) {
             val seconds = longestLoudRun * frame.size / sampleRate.coerceAtLeast(1)
             switchTo(
                 "${seconds}s of unbroken sound went by without it ever reporting speech " +
@@ -161,7 +164,7 @@ class ResilientVad(
 
         /**
          * How much *unbroken* sound above the room's floor it takes to call the primary
-         * detector broken: 312 frames of 32 ms, about ten seconds.
+         * detector broken: 937 frames of 32 ms, about thirty seconds.
          *
          * This counts a continuous run, not a total, and that distinction is the whole
          * point. The first version counted every loud frame in the session, and on a desk
@@ -170,7 +173,15 @@ class ResilientVad(
          * because it is not speech — which is the correct answer. Scattered clicks reset
          * the run; a person talking for ten seconds does not.
          */
-        const val LOUD_RUN_BEFORE_SWITCH = 312L
+        const val LOUD_RUN_BEFORE_SWITCH = 937L
+
+        /**
+         * And at least two minutes of audio before the question is even asked. Ten
+         * seconds of unbroken sound demoted a detector nine seconds into a car
+         * journey, where road noise never stops and the energy detector is useless
+         * anyway. Demoting has to be a considered verdict, not a first impression.
+         */
+        const val MIN_AUDIT_FRAMES = 3_750L
 
         /** ~10 minutes of 32 ms frames. After this the primary has earned its place. */
         const val AUDIT_FRAMES = 18_750L

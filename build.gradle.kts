@@ -30,25 +30,51 @@ extra["ndkAbi"] = "arm64-v8a"
 extra["coroutinesVersion"] = "1.9.0"
 
 /*
- * ...and 1.9.0 exactly, not the newest.
+ * ...and 1.9.0 exactly, not the newest, because of the Kotlin standard library underneath.
  *
- * This project compiles with Kotlin 1.9.24, whose compiler reads class metadata up to
- * version 2.0.0. Coroutines 1.10.x depends on kotlin-stdlib 2.1.0, Gradle upgrades the
- * whole stdlib to match, and every module then fails to compile with "the actual metadata
- * version is 2.1.0, but the compiler version 1.9.0 can read versions up to 2.0.0".
- * Coroutines 1.9.0 is the first release carrying the bridge the llama.cpp AAR needs and
- * the last one whose stdlib this compiler can still read.
- *
- * The stdlib is pinned below rather than left to resolution, so a future dependency that
- * wants a newer one fails at the pin instead of taking the whole build down. Moving this
- * project to Kotlin 2.x is what actually lifts the ceiling; that is a separate job.
+ * This project compiles with Kotlin 1.9.24, whose compiler reads class metadata only up to
+ * version 2.0.0. Coroutines 1.10.x depends on kotlin-stdlib 2.1.0 and every module then
+ * fails to compile on kotlin.Unit. 1.9.0 is the first release carrying the
+ * limitedParallelism bridge the llama.cpp AAR calls and the last whose stdlib this
+ * compiler can read.
  */
 extra["stdlibVersion"] = "2.0.20"
 
+/*
+ * The library that is *compiled against* and the one that is *shipped* are deliberately
+ * different versions.
+ *
+ * The llama.cpp AAR is built with Kotlin 2.3, and Kotlin 2.1 began emitting calls to
+ * kotlin.coroutines.jvm.internal.SpillingKt from the code it generates for suspend
+ * functions. That class does not exist in the 2.0.20 stdlib, so the AAR loaded, started
+ * generating, and died with "Failed resolution of: Lkotlin/coroutines/jvm/internal/
+ * SpillingKt;" — and because that is an Error rather than an Exception, the wrapper's own
+ * catch missed it and left its engine wedged in Generating for the life of the process.
+ *
+ * So: compile against 2.0.20, whose metadata this compiler can read, and package 2.3.0,
+ * which has everything the AAR's generated code calls. The stdlib keeps strict backward
+ * binary compatibility, so 1.9-compiled code runs on it unchanged.
+ *
+ * This is a stopgap and it is worth naming as one. Moving the project to Kotlin 2.x makes
+ * both numbers the same again, and that is its own piece of work.
+ */
+extra["runtimeStdlibVersion"] = "2.3.0"
+
 subprojects {
     configurations.configureEach {
+        // Anything the compiler or an annotation processor reads metadata from gets the
+        // version it can parse; anything that ends up in the APK gets the newer one.
+        val readByTheCompiler = name.endsWith("CompileClasspath") ||
+            name.startsWith("ksp") ||
+            name.contains("kotlinCompiler", ignoreCase = true) ||
+            name.startsWith("lint")
+        val stdlib = if (readByTheCompiler) {
+            rootProject.extra["stdlibVersion"]
+        } else {
+            rootProject.extra["runtimeStdlibVersion"]
+        }
         resolutionStrategy {
-            force("org.jetbrains.kotlin:kotlin-stdlib:${rootProject.extra["stdlibVersion"]}")
+            force("org.jetbrains.kotlin:kotlin-stdlib:$stdlib")
         }
     }
 }

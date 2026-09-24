@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -37,6 +38,33 @@ private val SHORT_CLOCK = SimpleDateFormat("HH:mm", Locale.getDefault())
  * Live: the transcript as it lands, and today's logs grouped by hour below it. On the cover
  * screen the hourly list is one tap away rather than squeezed underneath.
  */
+/**
+ * A progress bar with the name of whatever is running, or nothing at all when idle.
+ *
+ * Rendered by the shell rather than by one tab, so it is on every tab of both screens —
+ * the cover screen is where a long wait is most likely to be noticed. It is
+ * indeterminate on purpose: loading a model and generating tokens have no honest
+ * percentage, and a fake one that sticks at 90% is worse than a bar that simply moves.
+ * The label carries the real detail — "Thinking · 96 tokens", "Correcting · part 3 of 12".
+ */
+@Composable
+fun BusyBar(viewModel: RecorderViewModel) {
+    val compact = LocalCompact.current
+    val busy by viewModel.busy.collectAsState()
+    val label = busy ?: return
+
+    Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+        LinearProgressIndicator(Modifier.fillMaxWidth())
+        Text(
+            label,
+            color = if (compact) CoverColors.live else MaterialTheme.colorScheme.primary,
+            fontSize = if (compact) 11.sp else 12.sp,
+            maxLines = 1,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+    }
+}
+
 /**
  * One line: stop now, or pause for an hour and have it come back on its own.
  *

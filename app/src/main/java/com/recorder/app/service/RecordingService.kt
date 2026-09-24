@@ -176,6 +176,10 @@ class RecordingService : Service() {
             val silero = SileroVad.tryLoad(AsrModels.sileroVadFile(this@RecordingService))
             if (silero == null) {
                 Diagnostics.w(TAG, "Silero VAD not installed; using the energy fallback")
+            } else {
+                // What the model actually declares, so a wrong tensor is visible from the
+                // phone rather than inferred from suspiciously flat scores.
+                Diagnostics.i(TAG, "Silero loaded: ${silero.layoutSummary}")
             }
             val detector = ResilientVad(
                 primary = silero,
@@ -246,7 +250,11 @@ class RecordingService : Service() {
                     _state.value = RecorderState.ERROR
                     updateNotification(getString(R.string.notification_error))
                 }
-                .collect { segment -> stats.onSegment(pipeline.process(segment)) }
+                .collect { segment ->
+                    val startedAt = System.currentTimeMillis()
+                    val hadText = pipeline.process(segment)
+                    stats.onSegment(segment.durationMs, System.currentTimeMillis() - startedAt, hadText)
+                }
         }
     }
 

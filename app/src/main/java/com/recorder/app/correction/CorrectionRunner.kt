@@ -8,6 +8,7 @@ import com.recorder.core.storage.CorrectionPass
 import com.recorder.core.storage.DayKey
 import com.recorder.core.storage.DayPass
 import com.recorder.core.storage.Diagnostics
+import com.recorder.core.storage.RunningTasks
 import com.recorder.core.storage.SegmentCorrection
 import com.recorder.core.storage.TranscriptSegment
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,6 +43,9 @@ object CorrectionRunner {
     private const val LOCAL_CONTEXT = 6
     private const val CLOUD_WINDOW = 120
     private const val CLOUD_CONTEXT = 30
+
+    /** One id, because only one correction runs at a time (they share the model slot). */
+    private const val TASK = "correction"
 
     private val lock = Mutex()
 
@@ -115,9 +119,16 @@ object CorrectionRunner {
 
         val windows = segments.chunked(window)
         var total = 0
+        RunningTasks.start(TASK, what)
+        Diagnostics.i(
+            TAG,
+            "$what: ${segments.size} line(s) in ${windows.size} window(s), " +
+                "${if (cloud) "cloud" else "on device"}",
+        )
         try {
             windows.forEachIndexed { index, targets ->
                 _progress.value = "$what: part ${index + 1} of ${windows.size}"
+                RunningTasks.update(TASK, "part ${index + 1} of ${windows.size}")
                 val start = index * window
                 val before = segments.subList((start - contextLines).coerceAtLeast(0), start).map { it.text }
                 val end = start + targets.size
@@ -129,6 +140,7 @@ object CorrectionRunner {
             }
         } finally {
             _progress.value = null
+            RunningTasks.finish(TASK, "$total line(s) corrected")
         }
         return total
     }

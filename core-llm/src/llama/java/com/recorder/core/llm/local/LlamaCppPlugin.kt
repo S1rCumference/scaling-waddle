@@ -8,6 +8,7 @@ import com.arm.aichat.InferenceEngine.State
 import com.arm.aichat.UnsupportedArchitectureException
 import com.arm.aichat.isModelLoaded
 import com.recorder.core.storage.Diagnostics
+import com.recorder.core.storage.RunningTasks
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -50,13 +51,23 @@ class LlamaCppEngine(
      */
     override suspend fun generate(prompt: String, systemPrompt: String?, maxTokens: Int): String =
         turnLock.withLock {
-            if (dirty) reload()
-            dirty = true
-            if (!systemPrompt.isNullOrBlank()) engine.setSystemPrompt(systemPrompt)
+            RunningTasks.track("llm-generate", "Thinking") {
+                if (dirty) reload()
+                dirty = true
+                if (!systemPrompt.isNullOrBlank()) engine.setSystemPrompt(systemPrompt)
 
-            val out = StringBuilder()
-            engine.sendUserPrompt(prompt + thinkingSwitch(), maxTokens).collect { chunk -> out.append(chunk) }
-            stripThinking(out.toString())
+                val out = StringBuilder()
+                var tokens = 0
+                engine.sendUserPrompt(prompt + thinkingSwitch(), maxTokens).collect { chunk ->
+                    out.append(chunk)
+                    // A count is the difference between "slow" and "stopped" when the only
+                    // thing to look at is a progress bar.
+                    if (++tokens % TOKEN_REPORT_EVERY == 0) {
+                        RunningTasks.update("llm-generate", "$tokens tokens")
+                    }
+                }
+                stripThinking(out.toString())
+            }
         }
 
     private suspend fun reload() {
@@ -104,8 +115,14 @@ internal fun stripThinking(text: String): String =
 
 private const val TAG = "LlamaCppPlugin"
 
+/** Often enough to look alive, rarely enough not to churn the UI. */
+private const val TOKEN_REPORT_EVERY = 8
+
 /** Loading the native library and registering backends, on a cold start. */
 private const val STARTUP_TIMEOUT_MS = 30_000L
+
+/** Long enough for an in-flight generation to notice the cancel flag and unwind. */
+private const val RESET_TIMEOUT_MS = 10_000L
 
 /**
  * Puts the shared engine into the one state [InferenceEngine.loadModel] accepts.
@@ -127,13 +144,37 @@ internal suspend fun InferenceEngine.readyToLoad() {
 
     when (settled) {
         is State.Initialized -> Unit
+
         is State.Error, is State.ModelReady -> {
             Diagnostics.i(TAG, "resetting the engine from ${settled.label()} before loading")
             withContext(Dispatchers.IO) { cleanUp() }
         }
-        // Mid-generation or mid-benchmark: something else is using it, and taking the engine
-        // away would corrupt that caller's answer.
-        else -> error("the engine is busy (${settled.label()})")
+
+        // "Busy" here does not mean somebody else is using it. Callers reach this only
+        // while holding LocalModelRuntime's lock, so nothing legitimate can be generating.
+        // It means a previous turn died without the wrapper noticing: its catch takes
+        // Exception, and the missing-stdlib-class failure that used to happen here arrives
+        // as an Error, so the state machine sat in Generating for the life of the process
+        // and every later correction was refused with "the engine is busy".
+        else -> {
+            Diagnostics.w(TAG, "engine left in ${settled.label()}; clearing it")
+            // cleanUp sets its cancel flag first, so a generation that really is in flight
+            // unwinds to ModelReady and this returns cleanly.
+            runCatching { withContext(Dispatchers.IO) { cleanUp() } }
+            val after = withTimeoutOrNull(RESET_TIMEOUT_MS) {
+                state.first { it is State.Initialized || it is State.ModelReady || it is State.Error }
+            }
+            if (after is State.ModelReady || after is State.Error) {
+                runCatching { withContext(Dispatchers.IO) { cleanUp() } }
+            }
+            if (state.value !is State.Initialized) {
+                error(
+                    "the engine is wedged in ${state.value.label()} and cannot be reset. " +
+                        "Force-stop the app and start it again.",
+                )
+            }
+            Diagnostics.i(TAG, "engine recovered")
+        }
     }
 }
 

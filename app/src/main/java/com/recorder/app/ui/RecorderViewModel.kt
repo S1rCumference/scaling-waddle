@@ -51,6 +51,7 @@ import com.recorder.core.storage.ExportDefaults
 import com.recorder.core.storage.FtsQuery
 import com.recorder.core.storage.HourSummary
 import com.recorder.core.storage.ModelChoice
+import com.recorder.core.storage.RunningTasks
 import com.recorder.core.storage.latestBySegment
 import java.util.TimeZone
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -131,6 +132,12 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     val selection: StateFlow<Set<Long>> = AppUiState.selection
     val micSilenced: StateFlow<Boolean> = RecordingService.micSilenced
     val correctionProgress: StateFlow<String?> = CorrectionRunner.progress
+
+    /**
+     * What the app is busy with, or null. Drives the progress bar on both screens: work
+     * that takes a minute with no sign of life reads as work that is not happening.
+     */
+    val busy: StateFlow<String?> = RunningTasks.summary
 
     // --- Groups: today by hour, earlier days by day ---
 

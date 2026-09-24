@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import com.recorder.core.storage.Diagnostics
+import com.recorder.core.storage.RunningTasks
 import com.recorder.core.llm.BuildConfig
 import java.io.Closeable
 import java.io.File
@@ -157,10 +158,12 @@ object LocalModelRuntime {
             }
 
             runCatching {
-                val plugin = Class.forName(PLUGIN)
-                    .getDeclaredConstructor()
-                    .newInstance() as LocalLlmPlugin
-                plugin.load(context, model.path, contextSize)
+                RunningTasks.track("llm-load", "Loading ${model.label}") {
+                    val plugin = Class.forName(PLUGIN)
+                        .getDeclaredConstructor()
+                        .newInstance() as LocalLlmPlugin
+                    plugin.load(context, model.path, contextSize)
+                }
             }.onFailure {
                 lastError = it.message ?: it.javaClass.simpleName
                 Diagnostics.w(TAG, "failed to load ${model.fileName}", it)

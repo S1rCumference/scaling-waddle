@@ -136,6 +136,7 @@ private fun CompactShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) {
             }
             Text(message, color = CoverColors.live, fontSize = 13.sp, modifier = Modifier.padding(vertical = 2.dp))
         }
+        BusyBar(viewModel)
         Box(Modifier.weight(1f)) { TabContent(viewModel, tab, onRunSetup) }
         CompactTabs(tab, viewModel.flagged.collectAsState().value.size, viewModel.drafts.collectAsState().value.size) {
             viewModel.selectTab(it)
@@ -275,7 +276,10 @@ private fun ExpandedShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
             },
             snackbarHost = { SnackbarHost(snackbar) },
         ) { padding ->
-            Box(Modifier.padding(padding).fillMaxSize()) { TabContent(viewModel, underneath, onRunSetup) }
+            Column(Modifier.padding(padding).fillMaxSize()) {
+                BusyBar(viewModel)
+                Box(Modifier.fillMaxSize()) { TabContent(viewModel, underneath, onRunSetup) }
+            }
         }
 
         if (tab == AppTab.SETTINGS) {
