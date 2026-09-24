@@ -21,13 +21,36 @@ data class CorrectionWindow(
  */
 object CorrectionPrompt {
 
-    const val SYSTEM =
+    /** How the draft pass flags a word it guessed at. */
+    const val OPEN_MARK = "<<"
+    const val CLOSE_MARK = ">>"
+
+    /**
+     * The draft pass. Fast, and told to admit what it does not know rather than guess.
+     *
+     * Marking is the whole point of splitting the work: whatever comes back marked is the
+     * only thing the second pass has to look at, so the expensive careful reading happens on
+     * a handful of phrases instead of the whole transcript.
+     */
+    const val SYSTEM_DRAFT =
         "You fix speech-recognition errors in transcripts of the user's own conversations. " +
             "Some words were misheard as similar-sounding ones. Use the surrounding conversation " +
             "to decide what was really said, and fix only those words. Example: in a conversation " +
             "about videos someone posted, \"go through my contacts\" should be \"go through my " +
             "content\". Never rephrase, summarise, shorten, translate or add anything. Keep filler " +
-            "words and the speaker's own grammar. If a line is already right, repeat it exactly."
+            "words and the speaker's own grammar. If a line is already right, repeat it exactly. " +
+            "Wrap any word or phrase you are not sure about in $OPEN_MARK and $CLOSE_MARK, like " +
+            "$OPEN_MARK this $CLOSE_MARK. Mark generously: a marked guess is useful, a confident " +
+            "wrong answer is not. Answer immediately without reasoning first."
+
+    /** The repair pass. Sees only what the draft marked, with the lines either side of it. */
+    const val SYSTEM_REPAIR =
+        "You are resolving the uncertain parts of an almost-finished transcript. Each line " +
+            "contains one or more phrases wrapped in $OPEN_MARK and $CLOSE_MARK that the first " +
+            "pass was unsure about. Use the surrounding conversation to decide what was really " +
+            "said and replace each marked phrase with your best answer, removing the marks. If " +
+            "you still cannot tell, leave that phrase marked exactly as it is. Change nothing " +
+            "outside the marks. Answer immediately without reasoning first."
 
     fun build(window: CorrectionWindow): String = buildString {
         if (window.vocabulary.isNotEmpty()) {
@@ -51,6 +74,38 @@ object CorrectionPrompt {
         append("\nReply with exactly one line for each numbered line, in the same form: ")
         append("the number, a | and the corrected text. Output nothing else.")
     }
+
+    /** The repair prompt: only the lines the draft left marked, with their neighbours. */
+    fun buildRepair(marked: List<String>, context: List<String>): String = buildString {
+        if (context.isNotEmpty()) {
+            append("The conversation around these lines (context only, do not output):\n")
+            context.forEach { append("- ").append(it).append('\n') }
+            append('\n')
+        }
+        append("Lines with uncertain parts:\n")
+        marked.forEachIndexed { i, text ->
+            append(i + 1).append("| ").append(text.replace('\n', ' ')).append('\n')
+        }
+        append("\nReply with exactly one line for each numbered line, in the same form: ")
+        append("the number, a | and the line with each marked phrase resolved. Output nothing else.")
+    }
+
+    private val markPattern = Regex(
+        Regex.escape(OPEN_MARK) + "(.*?)" + Regex.escape(CLOSE_MARK),
+        RegexOption.DOT_MATCHES_ALL,
+    )
+
+    /** The phrases the model admitted it guessed at. */
+    fun marks(text: String): List<String> =
+        markPattern.findAll(text).map { it.groupValues[1].trim() }.filter { it.isNotEmpty() }.toList()
+
+    fun hasMarks(text: String): Boolean = markPattern.containsMatchIn(text)
+
+    /** The same line with the marks taken off, which is what gets stored and read. */
+    fun stripMarks(text: String): String =
+        markPattern.replace(text) { it.groupValues[1].trim() }
+            .replace(Regex("\\s{2,}"), " ")
+            .trim()
 
     private val numbered = Regex("""^\s*\**\s*(\d{1,3})\s*[|:.)\]]\s?(.*)$""")
 
@@ -148,25 +203,93 @@ object DayVocabulary {
     }
 }
 
-/** Runs one correction window through a provider. */
+/** One line after correction: what to store, and what the model would not commit to. */
+data class CorrectedLine(
+    val segmentId: Long,
+    val text: String,
+    /** Phrases the model marked and the repair pass could not resolve either. */
+    val uncertain: List<String> = emptyList(),
+)
+
+/**
+ * Runs one correction window through a provider as two short passes.
+ *
+ * One long pass was the problem: a 1.7B model asked to do careful work on twenty lines
+ * reasons about all of them at once, and on a phone that is two minutes of saturated CPU for
+ * a result nobody is waiting on. Splitting it means the first pass is quick and admits what
+ * it guessed, and the second pass only ever sees those admissions — usually a couple of
+ * phrases — so the careful expensive reading is spent where it changes the answer.
+ *
+ * The second pass is skipped entirely when the first marked nothing, which is the common case.
+ */
 class TranscriptCorrector(private val provider: LlmProvider) {
 
-    /** segment id → text to store, or a failure when the model gave nothing usable. */
-    suspend fun correct(window: CorrectionWindow): Result<Map<Long, String>> {
-        if (window.targets.isEmpty()) return Result.success(emptyMap())
-        val response = provider.complete(
+    suspend fun correct(window: CorrectionWindow): Result<List<CorrectedLine>> {
+        if (window.targets.isEmpty()) return Result.success(emptyList())
+
+        // --- pass 1: fast draft, marking anything it is unsure about ---------------------
+        val draft = provider.complete(
             listOf(
-                ChatMessage(Role.SYSTEM, CorrectionPrompt.SYSTEM),
+                ChatMessage(Role.SYSTEM, CorrectionPrompt.SYSTEM_DRAFT),
                 ChatMessage(Role.USER, CorrectionPrompt.build(window)),
             ),
+            TokenBudget.forLines(window.targets.size),
         )
-        if (response.isError) return Result.failure(IllegalStateException(response.error ?: "model unavailable"))
-        val parsed = CorrectionPrompt.parse(response.text, window.targets.size)
-        val resolved = CorrectionPrompt.resolve(window.targets, parsed)
-        return if (resolved.isEmpty()) {
-            Result.failure(IllegalStateException("the model's answer had no numbered lines"))
-        } else {
-            Result.success(resolved)
+        if (draft.isError) {
+            return Result.failure(IllegalStateException(draft.error ?: "model unavailable"))
         }
+        val drafted = CorrectionPrompt.resolve(
+            window.targets,
+            CorrectionPrompt.parse(draft.text, window.targets.size),
+        )
+        if (drafted.isEmpty()) {
+            return Result.failure(IllegalStateException("the model's answer had no numbered lines"))
+        }
+
+        // --- pass 2: only the marked lines, if there are any -----------------------------
+        val markedIds = drafted.filterValues { CorrectionPrompt.hasMarks(it) }.keys.toList()
+        val repaired: Map<Long, String> = if (markedIds.isEmpty()) {
+            emptyMap()
+        } else {
+            repair(markedIds.map { it to drafted.getValue(it) }, window)
+        }
+
+        return Result.success(
+            drafted.map { (id, draftText) ->
+                val finalText = repaired[id] ?: draftText
+                CorrectedLine(
+                    segmentId = id,
+                    text = CorrectionPrompt.stripMarks(finalText),
+                    uncertain = CorrectionPrompt.marks(finalText),
+                )
+            },
+        )
+    }
+
+    private suspend fun repair(
+        marked: List<Pair<Long, String>>,
+        window: CorrectionWindow,
+    ): Map<Long, String> {
+        val texts = marked.map { it.second }
+        val spans = texts.sumOf { CorrectionPrompt.marks(it).size }
+        val response = provider.complete(
+            listOf(
+                ChatMessage(Role.SYSTEM, CorrectionPrompt.SYSTEM_REPAIR),
+                ChatMessage(Role.USER, CorrectionPrompt.buildRepair(texts, window.before + window.after)),
+            ),
+            TokenBudget.forRepair(spans),
+        )
+        // A failed repair is not a failed correction: the draft still stands, marks and all.
+        if (response.isError) return emptyMap()
+        val parsed = CorrectionPrompt.parse(response.text, texts.size)
+        return parsed.mapNotNull { (index, text) ->
+            val (id, draftText) = marked.getOrNull(index) ?: return@mapNotNull null
+            // The repair may only resolve marks, never rewrite the line.
+            if (CorrectionPrompt.plausible(CorrectionPrompt.stripMarks(draftText), CorrectionPrompt.stripMarks(text))) {
+                id to text
+            } else {
+                null
+            }
+        }.toMap()
     }
 }

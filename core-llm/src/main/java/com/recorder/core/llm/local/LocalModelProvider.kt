@@ -5,6 +5,7 @@ import com.recorder.core.llm.ChatMessage
 import com.recorder.core.llm.LlmProvider
 import com.recorder.core.llm.LlmResponse
 import com.recorder.core.llm.ProviderIds
+import com.recorder.core.llm.TokenBudget
 import com.recorder.core.llm.Role
 import com.recorder.core.llm.ToolSpec
 import kotlinx.coroutines.CoroutineScope
@@ -49,7 +50,13 @@ class LocalModelProvider(
 
     val modelLabel: String? get() = LocalModelRuntime.current
 
-    override suspend fun complete(messages: List<ChatMessage>, tools: List<ToolSpec>): LlmResponse {
+    override suspend fun complete(messages: List<ChatMessage>, budget: TokenBudget): LlmResponse =
+        run(messages, budget)
+
+    override suspend fun complete(messages: List<ChatMessage>, tools: List<ToolSpec>): LlmResponse =
+        run(messages, TokenBudget(maxTokens, deadlineMs = 60_000))
+
+    private suspend fun run(messages: List<ChatMessage>, budget: TokenBudget): LlmResponse {
         val spec = selector.select(choice)
             ?: return LlmResponse.unavailable(unavailableReason())
 
@@ -61,7 +68,8 @@ class LocalModelProvider(
                     text = model.generate(
                         prompt = messages.userContent(),
                         systemPrompt = messages.systemContent(),
-                        maxTokens = maxTokens,
+                        maxTokens = budget.maxTokens,
+                        deadlineMs = budget.deadlineMs,
                     ).trim(),
                 )
             } ?: LlmResponse.unavailable(

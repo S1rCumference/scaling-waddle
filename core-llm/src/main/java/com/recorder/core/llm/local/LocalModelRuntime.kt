@@ -19,7 +19,13 @@ interface LocalLlm : Closeable {
      * [systemPrompt] is passed separately rather than glued onto [prompt] because the
      * backend applies the model's own chat template to each part.
      */
-    suspend fun generate(prompt: String, systemPrompt: String? = null, maxTokens: Int = 512): String
+    suspend fun generate(
+        prompt: String,
+        systemPrompt: String? = null,
+        maxTokens: Int = 512,
+        /** Wall-clock ceiling; the text produced so far is returned when it is reached. */
+        deadlineMs: Long = 60_000,
+    ): String
 
     /**
      * Runs the backend's own benchmark, if it has one, and returns its raw report.

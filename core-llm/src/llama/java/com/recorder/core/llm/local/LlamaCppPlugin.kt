@@ -12,6 +12,7 @@ import com.recorder.core.storage.RunningTasks
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -69,7 +70,12 @@ class LlamaCppEngine(
      * that is context rather than contamination — but it is a trade, and the turn bound is
      * what keeps it from growing without limit.
      */
-    override suspend fun generate(prompt: String, systemPrompt: String?, maxTokens: Int): String =
+    override suspend fun generate(
+        prompt: String,
+        systemPrompt: String?,
+        maxTokens: Int,
+        deadlineMs: Long,
+    ): String =
         turnLock.withLock {
             RunningTasks.track("llm-generate", "Thinking") {
                 val wanted = systemPrompt?.takeIf { it.isNotBlank() }
@@ -86,23 +92,50 @@ class LlamaCppEngine(
                 dirty = true
                 turnsSinceLoad++
                 if (wanted != null && wanted != residentSystemPrompt) {
-                    engine.setSystemPrompt(wanted)
+                    engine.setSystemPrompt(withNoThink(wanted))
                     residentSystemPrompt = wanted
                 }
 
                 val out = StringBuilder()
                 var tokens = 0
-                engine.sendUserPrompt(prompt + thinkingSwitch(), maxTokens).collect { chunk ->
-                    out.append(chunk)
-                    // A count is the difference between "slow" and "stopped" when the only
-                    // thing to look at is a progress bar.
-                    if (++tokens % TOKEN_REPORT_EVERY == 0) {
-                        RunningTasks.update("llm-generate", "$tokens tokens")
+                var stoppedBy: String? = null
+                val startedAt = System.currentTimeMillis()
+                val deadline = startedAt + deadlineMs
+
+                // The ceiling is enforced here, not only asked for.
+                //
+                // predictLength is handed to the native side, and a pass that was given 512
+                // produced 1151 tokens and ran for two minutes, so it is plainly not a
+                // guarantee. takeWhile is what stops it: abandoning the flow unwinds the
+                // generation, and it unwinds as a cancellation, which is the one path the
+                // wrapper puts back to ModelReady instead of leaving the engine in Error —
+                // so a capped pass costs nothing on the next turn.
+                engine.sendUserPrompt(prompt + NO_THINK, maxTokens)
+                    .takeWhile { chunk ->
+                        out.append(chunk)
+                        tokens++
+                        stoppedBy = when {
+                            tokens >= maxTokens -> "the ${maxTokens}-token ceiling"
+                            System.currentTimeMillis() > deadline -> "the ${deadlineMs / 1000}s deadline"
+                            // Still inside a reasoning block this far in means /no_think was
+                            // ignored, and everything after it is thinking too.
+                            tokens % THINK_CHECK_EVERY == 0 && out.isStillThinking() ->
+                                "an unclosed <think> block — /no_think was ignored"
+
+                            else -> null
+                        }
+                        if (tokens % TOKEN_REPORT_EVERY == 0) {
+                            RunningTasks.update("llm-generate", "$tokens tokens")
+                        }
+                        stoppedBy == null
                     }
-                }
+                    .collect { }
+
+                val elapsed = System.currentTimeMillis() - startedAt
                 Diagnostics.i(
                     TAG,
-                    "turn $turnsSinceLoad since load: $tokens token(s) out" +
+                    "turn $turnsSinceLoad: $tokens token(s) in ${"%.1f".format(elapsed / 1000.0)}s" +
+                        (stoppedBy?.let { ", cut off by $it" } ?: "") +
                         (why?.let { ", after a reload because $it" } ?: ", context reused"),
                 )
                 stripThinking(out.toString())
@@ -128,12 +161,15 @@ class LlamaCppEngine(
     }
 
     /**
-     * Qwen 3 reasons in a <think> block before answering unless told not to, which on a phone
-     * spends the whole token budget on reasoning nobody reads. "/no_think" is Qwen 3's
-     * documented switch; other models never see it.
+     * Qwen 3 reasons in a <think> block before answering unless told not to, and on a phone
+     * that spends the whole budget on reasoning nobody reads — 1151 tokens and two minutes
+     * to tidy twenty short lines. The switch now goes on the system prompt as well as the
+     * user turn, because one of the two is evidently not enough, and the token ceiling
+     * above is there for when neither is.
+     *
+     * Harmless to models that do not know it: it reads as a stray token in the prompt.
      */
-    private fun thinkingSwitch(): String =
-        if (modelName.startsWith("qwen3", ignoreCase = true)) " /no_think" else ""
+    private fun withNoThink(systemPrompt: String): String = systemPrompt.trimEnd() + NO_THINK
 
     /**
      * The wrapper ships its own benchmark, which is why this project does not hand-roll one:
@@ -175,6 +211,25 @@ private const val TOKEN_REPORT_EVERY = 8
  * for a long one, and a seventh starts fresh rather than risking a silent overflow.
  */
 private const val MAX_TURNS_PER_LOAD = 6
+
+/** Qwen 3's documented switch for answering without a reasoning block. */
+private const val NO_THINK = " /no_think"
+
+/**
+ * Tokens to allow before concluding the reasoning block is never going to close. A model
+ * that is asked not to think and thinks anyway has already lost the budget; this catches it
+ * in a couple of seconds rather than a couple of minutes.
+ */
+private const val THINKING_PATIENCE = 64
+
+/** Scanning the buffer on every token would be quadratic; every sixteenth is plenty. */
+private const val THINK_CHECK_EVERY = 16
+
+/** True when the text has opened a reasoning block it has not closed. */
+private fun StringBuilder.isStillThinking(): Boolean {
+    val opened = indexOf("<think>")
+    return opened >= 0 && indexOf("</think>", opened) < 0
+}
 
 /** Loading the native library and registering backends, on a cold start. */
 private const val STARTUP_TIMEOUT_MS = 30_000L

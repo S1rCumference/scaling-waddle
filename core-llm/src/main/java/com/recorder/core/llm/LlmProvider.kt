@@ -9,6 +9,49 @@ interface LlmProvider {
     val id: String
 
     suspend fun complete(messages: List<ChatMessage>, tools: List<ToolSpec> = emptyList()): LlmResponse
+
+    /**
+     * Same as [complete], with a ceiling on how much the model may produce and how long it
+     * may take. Providers that cannot enforce one ignore it and answer as usual.
+     */
+    suspend fun complete(messages: List<ChatMessage>, budget: TokenBudget): LlmResponse =
+        complete(messages)
+}
+
+/**
+ * What one task is allowed to spend.
+ *
+ * On-device generation has no natural stopping point: a 1.7B model asked a small question
+ * produced 1151 tokens and ran for two minutes, because nothing in the path said when to
+ * stop. Every call now carries a ceiling sized to its job, so the worst case is a truncated
+ * answer rather than a phone that is busy for minutes.
+ */
+data class TokenBudget(
+    val maxTokens: Int,
+    /** Wall-clock ceiling. Hit this and the answer so far is used. */
+    val deadlineMs: Long,
+) {
+    companion object {
+        /** Correcting n lines produces about n lines back, plus room for the model to be untidy. */
+        fun forLines(lines: Int): TokenBudget =
+            TokenBudget(
+                maxTokens = (lines * TOKENS_PER_LINE + 64).coerceIn(128, 768),
+                deadlineMs = 20_000,
+            )
+
+        /** Repairing only the marked spans is a fraction of the work of a full pass. */
+        fun forRepair(spans: Int): TokenBudget =
+            TokenBudget(
+                maxTokens = (spans * TOKENS_PER_LINE + 48).coerceIn(96, 384),
+                deadlineMs = 15_000,
+            )
+
+        /** An open question deserves a real answer, but not an unbounded one. */
+        val ANSWER = TokenBudget(maxTokens = 512, deadlineMs = 45_000)
+
+        /** A transcript line is short; 40 tokens covers a long one with room to spare. */
+        private const val TOKENS_PER_LINE = 40
+    }
 }
 
 enum class Role { SYSTEM, USER, ASSISTANT, TOOL }

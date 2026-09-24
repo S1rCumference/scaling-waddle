@@ -154,6 +154,7 @@ object CorrectionRunner {
         pass: String,
     ): Int {
         val chosen = ServiceLocator.providers.correctionProvider()
+        val startedAt = System.currentTimeMillis()
         val result = TranscriptCorrector(chosen.provider)
             .correct(CorrectionWindow(before, targets, after, vocabulary))
         val corrected = result.getOrElse { error ->
@@ -164,9 +165,24 @@ object CorrectionRunner {
         lastError = null
         val now = System.currentTimeMillis()
         db.corrections().insertAll(
-            corrected.map { (id, text) ->
-                SegmentCorrection(segmentId = id, text = text, pass = pass, engine = chosen.label, createdTs = now)
+            corrected.map {
+                SegmentCorrection(
+                    segmentId = it.segmentId,
+                    text = it.text,
+                    pass = pass,
+                    engine = chosen.label,
+                    createdTs = now,
+                )
             },
+        )
+        // Both passes, end to end, against the target. The per-pass token counts and timings
+        // are logged by the engine itself, so this is the line that says whether the split
+        // actually bought anything.
+        val stillUnsure = corrected.sumOf { it.uncertain.size }
+        Diagnostics.i(
+            TAG,
+            "${corrected.size} line(s) in ${"%.1f".format((now - startedAt) / 1000.0)}s" +
+                if (stillUnsure > 0) ", $stillUnsure phrase(s) still unresolved" else "",
         )
         return corrected.size
     }

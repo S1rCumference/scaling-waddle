@@ -94,3 +94,63 @@ class CorrectionPromptTest {
         assertEquals(listOf(1, 4, 7, 10), picked)
     }
 }
+
+/** The uncertainty marks the draft pass leaves for the repair pass. */
+class CorrectionMarkTest {
+
+    @Test
+    fun `marked phrases are found`() {
+        val line = "go through my <<contacts>> before the <<stand up>>"
+        assertEquals(listOf("contacts", "stand up"), CorrectionPrompt.marks(line))
+        assertTrue(CorrectionPrompt.hasMarks(line))
+    }
+
+    @Test
+    fun `stripping leaves the words and drops the marks`() {
+        assertEquals(
+            "go through my content today",
+            CorrectionPrompt.stripMarks("go through my <<content>> today"),
+        )
+    }
+
+    @Test
+    fun `stripping does not leave double spaces behind`() {
+        assertEquals("one two three", CorrectionPrompt.stripMarks("one << two >> three"))
+    }
+
+    @Test
+    fun `a clean line has nothing to repair`() {
+        assertTrue(CorrectionPrompt.marks("nothing uncertain here").isEmpty())
+        assertFalse(CorrectionPrompt.hasMarks("nothing uncertain here"))
+    }
+
+    @Test
+    fun `an unclosed mark is not treated as a span`() {
+        // A truncated answer can end mid-mark; that must not swallow the rest of the line.
+        assertTrue(CorrectionPrompt.marks("the << thing").isEmpty())
+        assertEquals("the << thing", CorrectionPrompt.stripMarks("the << thing"))
+    }
+}
+
+/** The ceilings that stop a pass running for minutes. */
+class TokenBudgetTest {
+
+    @Test
+    fun `a correction budget scales with the lines but stays bounded`() {
+        assertEquals(128, TokenBudget.forLines(1).maxTokens)
+        assertEquals(864.coerceAtMost(768), TokenBudget.forLines(20).maxTokens)
+        assertEquals(768, TokenBudget.forLines(500).maxTokens)
+    }
+
+    @Test
+    fun `a repair budget is smaller than a full pass`() {
+        assertTrue(TokenBudget.forRepair(2).maxTokens < TokenBudget.forLines(20).maxTokens)
+    }
+
+    @Test
+    fun `every budget has a deadline`() {
+        assertTrue(TokenBudget.forLines(20).deadlineMs in 1..60_000)
+        assertTrue(TokenBudget.forRepair(3).deadlineMs in 1..60_000)
+        assertTrue(TokenBudget.ANSWER.deadlineMs in 1..60_000)
+    }
+}
