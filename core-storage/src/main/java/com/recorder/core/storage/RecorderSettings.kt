@@ -51,8 +51,12 @@ class RecorderSettings(private val context: Context) {
         context.dataStore.data.map { it[Keys.ASR_THREADS] ?: DEFAULT_ASR_THREADS }
 
     /**
-     * Speech probability above which the VAD opens a segment. Higher misses quiet speech;
-     * lower wakes the decoder for background noise, which is the expensive mistake.
+     * Speech probability above which the VAD opens a segment.
+     *
+     * The default is deliberately low. Waking the decoder for background noise costs some
+     * battery and a line of nonsense that can be ignored; missing a conversation costs the
+     * thing this app is for. Adjustable in Settings, with a live readout of what the
+     * detector is actually scoring, because the right number depends on the room.
      */
     val vadThreshold: Flow<Float> =
         context.dataStore.data.map { it[Keys.VAD_THRESHOLD] ?: DEFAULT_VAD_THRESHOLD }
@@ -155,7 +159,7 @@ class RecorderSettings(private val context: Context) {
     suspend fun setAsrThreads(threads: Int) = edit { it[Keys.ASR_THREADS] = threads.coerceIn(1, 8) }
 
     suspend fun setVadThreshold(threshold: Float) = edit {
-        it[Keys.VAD_THRESHOLD] = threshold.coerceIn(0.1f, 0.95f)
+        it[Keys.VAD_THRESHOLD] = threshold.coerceIn(0.05f, 0.95f)
     }
 
     private suspend fun edit(block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
@@ -188,7 +192,8 @@ class RecorderSettings(private val context: Context) {
 
     companion object {
         const val DEFAULT_ASR_THREADS = 2
-        const val DEFAULT_VAD_THRESHOLD = 0.5f
+        /** Biased toward over-capture. See [vadThreshold]. */
+        const val DEFAULT_VAD_THRESHOLD = 0.3f
 
         /**
          * On battery the correction model is loaded at most this often. Each batch is a model

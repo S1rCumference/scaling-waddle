@@ -41,20 +41,54 @@ class LlamaCppEngine(
     /** True once a user prompt has gone into the native context since the last load. */
     private var dirty = false
 
+    /** The system prompt currently in the native context, or null if none was set. */
+    private var residentSystemPrompt: String? = null
+
+    /** Turns sent since the last load, so the context window cannot quietly overflow. */
+    private var turnsSinceLoad = 0
+
     /**
-     * Every call is a fresh conversation. The wrapper keeps chat history in its native
-     * context and only accepts a system prompt *immediately* after a load
-     * (InferenceEngineImpl.setSystemPrompt checks `_readyForSystemPrompt`), so a second call
-     * with a different system prompt used to throw, and a second call with the same one
-     * silently carried the previous task's text along. Reloading is cheap: the weights are
-     * memory-mapped and still in the page cache.
+     * Reuses the loaded context when it is safe to, and reloads when it is not.
+     *
+     * The wrapper keeps chat history in its native context and accepts a system prompt only
+     * immediately after a load (InferenceEngineImpl.setSystemPrompt checks
+     * `_readyForSystemPrompt`). The old code took the simple way out and reloaded before
+     * every call after the first, which is where "resetting the engine from ModelReady"
+     * came from on nearly every run — a full model load, per question, per correction
+     * window, all day.
+     *
+     * So a reload now happens only when one is actually needed:
+     *  - the system prompt is different from the one already in the context, because there
+     *    is no other way to replace it;
+     *  - [MAX_TURNS_PER_LOAD] turns have gone by, because the history is never cleared and
+     *    an overflowing context returns worse answers than a reload costs;
+     *  - the engine is in an error state, which [readyToLoad] handles.
+     *
+     * The trade is that consecutive turns under one load see each other's history. For the
+     * correction pass, where consecutive windows are neighbouring minutes of the same day,
+     * that is context rather than contamination — but it is a trade, and the turn bound is
+     * what keeps it from growing without limit.
      */
     override suspend fun generate(prompt: String, systemPrompt: String?, maxTokens: Int): String =
         turnLock.withLock {
             RunningTasks.track("llm-generate", "Thinking") {
-                if (dirty) reload()
+                val wanted = systemPrompt?.takeIf { it.isNotBlank() }
+                val why = when {
+                    !dirty -> null
+                    wanted != null && wanted != residentSystemPrompt -> "the task changed"
+                    turnsSinceLoad >= MAX_TURNS_PER_LOAD ->
+                        "$turnsSinceLoad turns of history would crowd the context"
+
+                    else -> null
+                }
+                if (why != null) reload(why)
+
                 dirty = true
-                if (!systemPrompt.isNullOrBlank()) engine.setSystemPrompt(systemPrompt)
+                turnsSinceLoad++
+                if (wanted != null && wanted != residentSystemPrompt) {
+                    engine.setSystemPrompt(wanted)
+                    residentSystemPrompt = wanted
+                }
 
                 val out = StringBuilder()
                 var tokens = 0
@@ -66,16 +100,31 @@ class LlamaCppEngine(
                         RunningTasks.update("llm-generate", "$tokens tokens")
                     }
                 }
+                Diagnostics.i(
+                    TAG,
+                    "turn $turnsSinceLoad since load: $tokens token(s) out" +
+                        (why?.let { ", after a reload because $it" } ?: ", context reused"),
+                )
                 stripThinking(out.toString())
             }
         }
 
-    private suspend fun reload() {
+    private suspend fun reload(why: String) {
+        val startedAt = System.currentTimeMillis()
+        RunningTasks.update("llm-generate", "reloading the model")
         engine.readyToLoad()
         engine.loadModel(modelPath)
         val state = engine.state.first { it is State.ModelReady || it is State.Error }
         if (state is State.Error) error("reload failed: ${describe(state.exception)}")
         dirty = false
+        turnsSinceLoad = 0
+        residentSystemPrompt = null
+        // Timed separately from generation, because "the model is slow to load" and "the
+        // model is slow to answer" need completely different fixes.
+        Diagnostics.i(
+            TAG,
+            "reloaded $modelName in ${"%.1f".format((System.currentTimeMillis() - startedAt) / 1000.0)}s — $why",
+        )
     }
 
     /**
@@ -117,6 +166,15 @@ private const val TAG = "LlamaCppPlugin"
 
 /** Often enough to look alive, rarely enough not to churn the UI. */
 private const val TOKEN_REPORT_EVERY = 8
+
+/**
+ * Turns to run under one load before starting again.
+ *
+ * The native context is 8192 tokens and the wrapper never clears it. A correction window is
+ * roughly 400 tokens in and 400 out, so six turns sits comfortably inside that with room
+ * for a long one, and a seventh starts fresh rather than risking a silent overflow.
+ */
+private const val MAX_TURNS_PER_LOAD = 6
 
 /** Loading the native library and registering backends, on a cold start. */
 private const val STARTUP_TIMEOUT_MS = 30_000L

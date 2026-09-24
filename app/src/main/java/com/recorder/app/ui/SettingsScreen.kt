@@ -11,8 +11,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -26,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.Alignment
 import com.recorder.app.models.InstallProgress
+import com.recorder.app.service.RecordingService
 import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
 import com.recorder.core.storage.ModelChoice
@@ -63,6 +66,7 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(if (LocalCompact.current) 4.dp else 16.dp),
     ) {
+        Section("Microphone sensitivity", "mic") { MicSensitivitySection(viewModel) }
         Section("Models", "models") { ModelsSection(viewModel, onRunSetup) }
         Section("Correction", "correction") { CorrectionSection(viewModel) }
         Section("Cloud AI (optional)", "cloud") {
@@ -403,6 +407,72 @@ private fun DiagnosticsSection(viewModel: RecorderViewModel) {
  * A collapsible settings group. Which one is open is shared state, so it stays open across a
  * fold like everything else.
  */
+/**
+ * The detection threshold, with the detector's live opinion next to it.
+ *
+ * A threshold is impossible to choose from a number that appears once a minute in a log.
+ * Talking while watching the bar move is the only way to tell "the detector never fires"
+ * apart from "the threshold is a shade too high", and those two have been indistinguishable
+ * from the outside for several versions.
+ */
+@Composable
+private fun MicSensitivitySection(viewModel: RecorderViewModel) {
+    val score by viewModel.micScore.collectAsState()
+    val peak by viewModel.micPeak.collectAsState()
+    val highest by viewModel.micHighest.collectAsState()
+    val threshold by viewModel.vadThreshold.collectAsState()
+    val recording by viewModel.recorderState.collectAsState()
+
+    if (recording != RecordingService.RecorderState.RECORDING) {
+        Text(
+            "Start recording to see the meter move.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+
+    Text("Speech detected", style = MaterialTheme.typography.labelLarge)
+    LinearProgressIndicator(
+        progress = { score.coerceIn(0f, 1f) },
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+    )
+    Text(
+        "now ${"%.2f".format(score)} · highest ${"%.2f".format(highest)} · " +
+            "opens a segment at ${"%.2f".format(threshold)}",
+        style = MaterialTheme.typography.bodySmall,
+    )
+
+    Text("Loudness", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
+    LinearProgressIndicator(
+        progress = { peak.coerceIn(0f, 1f) },
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+    )
+    Text(
+        "${(peak * 100).toInt()}% of full scale. If this moves while you talk and the bar " +
+            "above does not, the microphone is fine and the detector is the problem.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+
+    Text(
+        "Threshold ${"%.2f".format(threshold)}",
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier.padding(top = 12.dp),
+    )
+    Slider(
+        value = threshold,
+        onValueChange = { viewModel.setVadThreshold(it) },
+        valueRange = 0.05f..0.95f,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Text(
+        "Lower catches more and transcribes more noise; higher is tidier and misses more. " +
+            "Anything loud that goes a whole window without crossing this line is " +
+            "transcribed anyway rather than thrown away, so erring low costs battery " +
+            "rather than words. Takes effect the next time recording starts.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    TextButton(onClick = viewModel::resetMicHighest) { Text("Reset the highest") }
+}
+
 @Composable
 private fun Section(title: String, key: String, content: @Composable () -> Unit) {
     val open by AppUiState.settingsSection.collectAsState()

@@ -109,14 +109,31 @@ class SpeechSegmenter(
         (frame.samples.size * 1000L / frame.sampleRate).coerceAtLeast(1)
 }
 
-/** Wires mic frames through a detector into speech segments. */
+/**
+ * Wires mic frames through a detector into speech segments.
+ *
+ * [overCapture] is the safety net described in [OverCapture]: a window that goes by loud
+ * and unrecognised is transcribed anyway rather than thrown away. Pass null to switch it
+ * off, which is what the tests do when they are measuring the detector alone.
+ */
 fun Flow<AudioFrame>.segmentSpeech(
     vad: VoiceActivityDetector,
     segmenter: SpeechSegmenter = SpeechSegmenter(),
+    overCapture: OverCapture? = OverCapture(),
+    onFallbackCapture: (SpeechSegment) -> Unit = {},
 ): Flow<SpeechSegment> = flow {
     collect { frame ->
         val probability = vad.speechProbability(frame.samples, frame.sampleRate)
-        segmenter.accept(frame, probability)?.let { emit(it) }
+        val segment = segmenter.accept(frame, probability)
+        if (segment != null) {
+            overCapture?.onSegment()
+            emit(segment)
+        } else {
+            overCapture?.accept(frame, probability)?.let {
+                onFallbackCapture(it)
+                emit(it)
+            }
+        }
     }
     segmenter.flush()?.let { emit(it) }
 }

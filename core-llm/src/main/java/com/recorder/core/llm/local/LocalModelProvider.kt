@@ -114,8 +114,16 @@ class LocalModelProvider(
         }
 
     private companion object {
-        /** Long enough for a follow-up question, short enough not to hold RAM all day. */
-        const val IDLE_UNLOAD_MS = 3 * 60 * 1000L
+        /**
+         * Long enough to cover the gap between correction batches, short enough not to hold
+         * the weights all day.
+         *
+         * Three minutes was shorter than the interval between runs, so the model was evicted
+         * and loaded from cold almost every single time — the eviction cost more than the
+         * residency it was avoiding. The weights are memory-mapped, so the pages the system
+         * actually needs back it can take without asking.
+         */
+        const val IDLE_UNLOAD_MS = 10 * 60 * 1000L
     }
 
     private fun List<ChatMessage>.systemContent(): String? =

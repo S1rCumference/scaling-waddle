@@ -41,6 +41,7 @@ import com.recorder.app.models.ModelDownloadService
 import com.recorder.app.models.ModelEntry
 import com.recorder.app.models.ModelInstallStore
 import com.recorder.app.service.MicConflict
+import com.recorder.app.service.MicLevels
 import com.recorder.core.llm.GroupAssistant
 import com.recorder.core.llm.ScopedLine
 import com.recorder.core.storage.DayKey
@@ -159,6 +160,72 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     val days: StateFlow<List<DaySummary>> =
         db.transcripts().daySummaries().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    // --- Logs as a calendar ----------------------------------------------------------------
+    //
+    // Anything from the last day stays a flat list of hours, which is what you actually scroll
+    // when you are looking for something you said this morning. Everything older rolls up into
+    // months, then days, then hours, because a flat list of every hour ever recorded stops
+    // being navigable within about a week.
+
+    /**
+     * The moving 24-hour boundary, re-read every few minutes.
+     *
+     * One value shared by both sides of the split, because they have to agree: if the live
+     * list used a boundary that moved only at midnight while the archive used the current
+     * time, a day would show up in both at once.
+     */
+    private val recentCutoff: Flow<Long> = flow {
+        while (true) {
+            emit(System.currentTimeMillis() - RECENT_WINDOW_MS)
+            delay(CUTOFF_REFRESH_MS)
+        }
+    }
+
+    /** Hours in the last 24 hours, newest first — the live list, regardless of date. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val recentHours: StateFlow<List<HourSummary>> = recentCutoff
+        .flatMapLatest { from ->
+            val offset = TimeZone.getDefault().getOffset(System.currentTimeMillis()).toLong()
+            db.transcripts().hourSummaries(from, Long.MAX_VALUE, offset)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Days older than the recent window, grouped by month, newest month first.
+     *
+     * A day is only archived once all of it has aged out, so nothing appears in both the
+     * live list and the calendar.
+     */
+    val months: StateFlow<List<MonthSummary>> = combine(days, recentCutoff) { all, cutoff ->
+            all.filter { it.lastTs < cutoff }
+                .groupBy { it.dayKey / 100 }
+                .map { (month, inMonth) -> MonthSummary(month, inMonth.sortedByDescending { it.dayKey }) }
+                .sortedByDescending { it.monthKey }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    private val _openDay = MutableStateFlow<Int?>(null)
+
+    /** The day expanded in the calendar, or null. */
+    val openDay: StateFlow<Int?> = _openDay.asStateFlow()
+
+    /** The hours of [openDay], loaded only while one is expanded. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val openDayHours: StateFlow<List<HourSummary>> = _openDay
+        .flatMapLatest { day ->
+            if (day == null) {
+                flowOf(emptyList())
+            } else {
+                val offset = TimeZone.getDefault().getOffset(System.currentTimeMillis()).toLong()
+                db.transcripts().hourSummaries(DayKey.startOf(day), DayKey.endOf(day), offset)
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun openDay(dayKey: Int?) {
+        _openDay.value = if (_openDay.value == dayKey) null else dayKey
+    }
 
     /** Lines of the open group, each with its newest correction. */
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -461,6 +528,26 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         if (enabled) RecordingService.start(context) else RecordingService.stop(context)
     }
 
+    // --- Microphone sensitivity -----------------------------------------------------------
+
+    /** The detector's live score, for the meter in Settings. */
+    val micScore: StateFlow<Float> = MicLevels.score
+
+    /** The live frame peak, so a dead microphone looks different from a quiet room. */
+    val micPeak: StateFlow<Float> = MicLevels.peak
+
+    /** The highest score since the meter was last cleared, so a brief spike is not missed. */
+    val micHighest: StateFlow<Float> = MicLevels.highest
+
+    val vadThreshold: StateFlow<Float> = settings.vadThreshold
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0.3f)
+
+    fun setVadThreshold(value: Float) = viewModelScope.launch {
+        settings.setVadThreshold(value)
+    }
+
+    fun resetMicHighest() = MicLevels.resetHighest()
+
     /** When the current pause ends, or 0. Shown on both the inner and the cover screen. */
     val pausedUntil: StateFlow<Long> = RecordingService.pausedUntil
 
@@ -711,6 +798,12 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         /** Enough history to scroll back a little on a 4 inch screen, not enough to cost. */
         const val COVER_SEGMENT_LIMIT = 60
         const val COVER_REFRESH_MS = 1_000L
+
+        /** How long entries stay in the flat live list before rolling up into the calendar. */
+        const val RECENT_WINDOW_MS = 24 * 60 * 60 * 1000L
+
+        /** How often the boundary is re-read. Fine-grained enough; it moves by the hour. */
+        const val CUTOFF_REFRESH_MS = 5 * 60 * 1000L
 
         /** One query per pause in typing, not one per keystroke. */
         const val SEARCH_DEBOUNCE_MS = 250L

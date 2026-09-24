@@ -22,6 +22,7 @@ import com.recorder.core.asr.AsrEngineFactory
 import com.recorder.core.asr.AsrModels
 import com.recorder.core.asr.NoopAsrEngine
 import com.recorder.core.audio.AudioCapture
+import com.recorder.core.audio.OverCapture
 import com.recorder.core.audio.ResilientVad
 import com.recorder.core.audio.SileroVad
 import com.recorder.core.audio.SpeechSegmenter
@@ -173,6 +174,17 @@ class RecordingService : Service() {
             val threads = settings.asrThreads.first()
             val threshold = settings.vadThreshold.first()
 
+            // Exactly what the detector is being handed, in the form it is handed. Loudness
+            // was being reported from the same buffer, so "loud audio, no speech" could not
+            // be separated from "audio in the wrong shape" without this line.
+            Diagnostics.i(
+                TAG,
+                "capture: ${AudioCapture.SAMPLE_RATE} Hz mono, 16-bit PCM scaled to float " +
+                    "-1..1, ${AudioCapture.FRAME_SAMPLES} samples per frame " +
+                    "(${AudioCapture.FRAME_SAMPLES * 1000 / AudioCapture.SAMPLE_RATE} ms), " +
+                    "threshold $threshold",
+            )
+
             val silero = SileroVad.tryLoad(AsrModels.sileroVadFile(this@RecordingService))
             if (silero == null) {
                 Diagnostics.w(TAG, "Silero VAD not installed; using the energy fallback")
@@ -242,8 +254,10 @@ class RecordingService : Service() {
                     emit(frame)
                 }
                 .segmentSpeech(
-                    ObservedVad(detector, threshold, stats),
-                    SpeechSegmenter(threshold = threshold),
+                    vad = ObservedVad(detector, threshold, stats),
+                    segmenter = SpeechSegmenter(threshold = threshold),
+                    overCapture = OverCapture(speechThreshold = threshold),
+                    onFallbackCapture = { stats.onFallbackCapture() },
                 )
                 .catch { error ->
                     Diagnostics.e(TAG, "capture pipeline failed", error)

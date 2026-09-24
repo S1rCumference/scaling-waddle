@@ -51,7 +51,13 @@ class ObservedVad(
 
     override fun speechProbability(frame: FloatArray, sampleRate: Int): Float {
         val probability = delegate.speechProbability(frame, sampleRate)
+        var peak = 0f
+        for (sample in frame) {
+            val level = kotlin.math.abs(sample)
+            if (level > peak) peak = level
+        }
         stats.onFrame(frame, probability, probability >= threshold)
+        MicLevels.publish(probability, peak)
         return probability
     }
 

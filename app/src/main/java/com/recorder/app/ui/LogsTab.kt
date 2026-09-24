@@ -56,10 +56,12 @@ fun LogsTab(viewModel: RecorderViewModel) {
 @Composable
 private fun GroupList(viewModel: RecorderViewModel) {
     val compact = LocalCompact.current
-    val hours by viewModel.todayHours.collectAsState()
+    val hours by viewModel.recentHours.collectAsState()
     val days by viewModel.days.collectAsState()
-    val today = DayKey.today()
-    val earlier = days.filter { it.dayKey != today }
+    val months by viewModel.months.collectAsState()
+    val openDay by viewModel.openDay.collectAsState()
+    val openDayHours by viewModel.openDayHours.collectAsState()
+    var openMonth by remember { mutableStateOf<Int?>(null) }
     var exporting by remember { mutableStateOf(false) }
     var searching by remember { mutableStateOf(false) }
     val query by viewModel.logQuery.collectAsState()
@@ -97,23 +99,75 @@ private fun GroupList(viewModel: RecorderViewModel) {
             return@LazyColumn
         }
 
+        // The last day stays flat. It is the part you actually scroll looking for something
+        // you said this morning, and folding it away to save three rows would cost more
+        // taps than it saves.
         if (hours.isNotEmpty()) {
-            item { SectionLabel("Today, by hour") }
+            item { SectionLabel("Last 24 hours") }
             items(hours, key = { "h${it.bucket}" }) { hour ->
                 val ref = GroupRef.hour(hour.firstTs)
                 GroupRow(ref.title(), "${hour.count} lines") { viewModel.openGroup(ref) }
             }
         }
-        if (earlier.isNotEmpty()) {
-            item { SectionLabel("Earlier days") }
-            items(earlier, key = { "d${it.dayKey}" }) { day ->
-                val ref = GroupRef.day(day.dayKey)
-                val span = "${SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(day.firstTs))}–" +
-                    SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(day.lastTs))
-                GroupRow(ref.title(), "${day.count} lines · $span") { viewModel.openGroup(ref) }
+
+        // Everything older rolls up: months, then days, then hours. A flat list of every
+        // hour ever recorded stops being navigable inside a week.
+        if (months.isNotEmpty()) {
+            item { SectionLabel("Earlier") }
+            months.forEach { month ->
+                val expanded = openMonth == month.monthKey
+                item(key = "m${month.monthKey}") {
+                    GroupRow(
+                        title = monthTitle(month.monthKey),
+                        detail = "${month.days.size} day(s) · ${month.lineCount} lines",
+                        chevron = if (expanded) "−" else "+",
+                    ) {
+                        openMonth = if (expanded) null else month.monthKey
+                        viewModel.openDay(null)
+                    }
+                }
+                if (!expanded) return@forEach
+
+                month.days.forEach { day ->
+                    val dayOpen = openDay == day.dayKey
+                    item(key = "d${day.dayKey}") {
+                        val span = "${CLOCK_SHORT.format(Date(day.firstTs))}–" +
+                            CLOCK_SHORT.format(Date(day.lastTs))
+                        GroupRow(
+                            title = GroupRef.day(day.dayKey).title(),
+                            detail = "${day.count} lines · $span",
+                            indent = 1,
+                            chevron = if (dayOpen) "−" else "+",
+                        ) { viewModel.openDay(day.dayKey) }
+                    }
+                    if (!dayOpen) return@forEach
+
+                    if (openDayHours.isEmpty()) {
+                        item(key = "dl${day.dayKey}") {
+                            Text(
+                                "Loading…",
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(start = 28.dp, bottom = 4.dp),
+                            )
+                        }
+                    }
+                    items(openDayHours, key = { "dh${day.dayKey}-${it.bucket}" }) { hour ->
+                        val ref = GroupRef.hour(hour.firstTs)
+                        GroupRow(ref.title(), "${hour.count} lines", indent = 2) {
+                            viewModel.openGroup(ref)
+                        }
+                    }
+                    // Whole day at once, for asking about it or exporting it.
+                    item(key = "da${day.dayKey}") {
+                        GroupRow("The whole day", "${day.count} lines", indent = 2) {
+                            viewModel.openGroup(GroupRef.day(day.dayKey))
+                        }
+                    }
+                }
             }
         }
-        if (hours.isEmpty() && earlier.isEmpty()) {
+
+        if (hours.isEmpty() && months.isEmpty()) {
             item { EmptyState("No logs yet. They group themselves as you talk.") }
         }
     }
@@ -178,19 +232,48 @@ private fun SectionLabel(text: String) {
     )
 }
 
+private val CLOCK_SHORT = SimpleDateFormat("HH:mm", Locale.getDefault())
+
+/** "September 2026" from a yyyyMM key. */
+private fun monthTitle(monthKey: Int): String {
+    val calendar = java.util.Calendar.getInstance().apply {
+        set(java.util.Calendar.YEAR, monthKey / 100)
+        set(java.util.Calendar.MONTH, monthKey % 100 - 1)
+        set(java.util.Calendar.DAY_OF_MONTH, 1)
+    }
+    return SimpleDateFormat("LLLL yyyy", Locale.getDefault()).format(calendar.time)
+}
+
 @Composable
-private fun GroupRow(title: String, detail: String, onClick: () -> Unit) {
+private fun GroupRow(
+    title: String,
+    detail: String,
+    indent: Int = 0,
+    chevron: String? = null,
+    onClick: () -> Unit,
+) {
     val compact = LocalCompact.current
+    val pad = (indent * if (compact) 10 else 16).dp
     if (compact) {
-        Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp)) {
+        Row(
+            Modifier.fillMaxWidth().clickable(onClick = onClick)
+                .padding(start = pad, top = 8.dp, bottom = 8.dp),
+        ) {
             Text(title, color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
             Text(detail, color = CoverColors.dim, fontSize = 12.sp)
+            chevron?.let { Text(" $it", color = CoverColors.dim, fontSize = 14.sp) }
         }
     } else {
-        Card(Modifier.fillMaxWidth().padding(vertical = 3.dp).clickable(onClick = onClick)) {
-            Row(Modifier.padding(12.dp)) {
+        Card(
+            Modifier.fillMaxWidth().padding(start = pad, top = 3.dp, bottom = 3.dp)
+                .clickable(onClick = onClick),
+        ) {
+            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                 Text(detail, style = MaterialTheme.typography.labelMedium)
+                chevron?.let {
+                    Text("  $it", style = MaterialTheme.typography.titleSmall)
+                }
             }
         }
     }

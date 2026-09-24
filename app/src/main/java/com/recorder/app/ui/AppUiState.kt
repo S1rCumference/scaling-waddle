@@ -163,3 +163,11 @@ object AppUiState {
 
     fun toggleSelected(id: Long) = selection.update { if (id in it) it - id else it + id }
 }
+
+/** A month of archived days, for the Logs calendar. */
+data class MonthSummary(
+    val monthKey: Int,
+    val days: List<com.recorder.core.storage.DaySummary>,
+) {
+    val lineCount: Int get() = days.sumOf { it.count }
+}

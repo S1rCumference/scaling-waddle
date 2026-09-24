@@ -58,11 +58,24 @@ class SileroVad private constructor(
             ?: session.outputNames.firstOrNull { it != stateOutput && it != hOutput && it != cOutput }
             ?: session.outputNames.first()
 
-    /** What this model actually declares, for the diagnostics screen. */
+    /**
+     * What this model actually declares, shapes included, for the diagnostics screen.
+     *
+     * The shapes are the point. "input,state,sr" told us the names matched and nothing
+     * about whether the tensor being handed over is the shape the model wants, which is
+     * the difference between a detector that is being fed properly and one that is being
+     * fed a 512-sample window it cannot use.
+     */
     val layoutSummary: String
-        get() = "inputs ${session.inputNames.joinToString(",")} → " +
-            "outputs ${session.outputNames.joinToString(",")} " +
+        get() = "inputs ${describe(session.inputInfo)} → outputs ${describe(session.outputInfo)} " +
             "(probability from \"$probabilityOutput\", state from \"${stateOutput ?: hOutput}\")"
+
+    private fun describe(info: Map<String, ai.onnxruntime.NodeInfo>): String =
+        info.entries.joinToString(", ") { (name, node) ->
+            val shape = (node.info as? ai.onnxruntime.TensorInfo)
+                ?.shape?.joinToString("x") { if (it < 0) "?" else it.toString() }
+            if (shape == null) name else "$name[$shape]"
+        }
 
     /** Silero v5 carries one packed `state` tensor; v4 carries separate `h` and `c`. */
     private enum class Layout { V5_STATE, V4_HC }

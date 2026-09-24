@@ -23,6 +23,7 @@ class PipelineStats {
     @Volatile private var transcribed = 0L
     @Volatile private var segmentAudioMs = 0L
     @Volatile private var decodeTimeMs = 0L
+    @Volatile private var rescued = 0L
     @Volatile private var peak = 0f
     @Volatile private var bestProbability = 0f
 
@@ -43,6 +44,11 @@ class PipelineStats {
      * it produced anything. The ratio of those two is what says "the speech model is slow"
      * rather than leaving it as a guess.
      */
+    /** A window the detector never called speech, captured anyway. */
+    fun onFallbackCapture() {
+        rescued++
+    }
+
     fun onSegment(audioMs: Long, decodeMs: Long, hadText: Boolean) {
         segments++
         segmentAudioMs += audioMs
@@ -60,6 +66,7 @@ class PipelineStats {
         val text = transcribed
         val audioMs = segmentAudioMs
         val decodeMs = decodeTimeMs
+        val saved = rescued
         frames = 0
         peak = 0f
         bestProbability = 0f
@@ -68,6 +75,7 @@ class PipelineStats {
         transcribed = 0
         segmentAudioMs = 0
         decodeTimeMs = 0
+        rescued = 0
 
         if (f == 0L) {
             Diagnostics.w(tag, "no audio reached the recorder in the last minute")
@@ -80,7 +88,8 @@ class PipelineStats {
             tag,
             "last minute: ${seconds}s of audio, loudest ${level}% of full scale, " +
                 "detector best ${"%.2f".format(windowBest)}, $speech speech frames, " +
-                "$segs segment(s), $text transcribed" +
+                "$segs segment(s)${if (saved > 0L) " ($saved captured anyway)" else ""}, " +
+                "$text transcribed" +
                 if (segs > 0L) {
                     ", ${audioMs / 1000}s of speech decoded in ${decodeMs / 1000}s " +
                         "(${"%.1f".format(if (audioMs > 0) decodeMs.toDouble() / audioMs else 0.0)}x)"
@@ -100,8 +109,13 @@ class PipelineStats {
             speech == 0L -> Diagnostics.w(
                 tag,
                 "there was sound but nothing was treated as speech — the detector's best " +
-                    "score was ${"%.2f".format(windowBest)}. Lower the sensitivity in Settings " +
-                    "if this keeps happening in a room where someone was talking.",
+                    "score was ${"%.2f".format(windowBest)}" +
+                    if (saved > 0L) {
+                        ", so $saved window(s) were captured anyway rather than discarded. " +
+                            "Settings → Microphone sensitivity has a live meter for tuning this."
+                    } else {
+                        ". Settings → Microphone sensitivity has a live meter for tuning this."
+                    },
             )
 
             segs > 0L && text == 0L -> Diagnostics.w(
