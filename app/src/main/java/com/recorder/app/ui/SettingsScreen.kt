@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.Alignment
 import com.recorder.app.models.InstallProgress
+import com.recorder.app.correction.SummaryRunner
 import com.recorder.app.service.RecordingService
 import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
@@ -69,6 +70,7 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
         Section("Microphone sensitivity", "mic") { MicSensitivitySection(viewModel) }
         Section("Models", "models") { ModelsSection(viewModel, onRunSetup) }
         Section("Correction", "correction") { CorrectionSection(viewModel) }
+        Section("What the AI has been taught", "taught") { TaughtSection(viewModel) }
         Section("Cloud AI (optional)", "cloud") {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Switch(
@@ -471,6 +473,49 @@ private fun MicSensitivitySection(viewModel: RecorderViewModel) {
         style = MaterialTheme.typography.bodySmall,
     )
     TextButton(onClick = viewModel::resetMicHighest) { Text("Reset the highest") }
+}
+
+/**
+ * The corrections the user has made, which are fed back into later passes.
+ *
+ * Shown and prunable because it steers every summary from here on: a wrong entry would keep
+ * teaching the wrong thing, and there is no way to tell that from the outside unless the
+ * list is visible. It is a plain list of substitutions, not training of any kind.
+ */
+@Composable
+private fun TaughtSection(viewModel: RecorderViewModel) {
+    val taught by viewModel.taughtCorrections.collectAsState()
+
+    Text(
+        "When you mark a summary item wrong or fix its wording, the change is kept here and " +
+            "put in front of the model next time. The newest ${SummaryRunner.TAUGHT_IN_PROMPT} " +
+            "go into each prompt; the newest ${SummaryRunner.TAUGHT_KEPT} are kept at all.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    if (taught.isEmpty()) {
+        Text(
+            "Nothing yet. Mark something wrong in a summary and it will appear here.",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        return
+    }
+
+    taught.forEach { entry ->
+        Card(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(entry.wrong, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        if (entry.corrected.isBlank()) "→ marked wrong" else "→ ${entry.corrected}",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                TextButton(onClick = { viewModel.forgetCorrection(entry.id) }) { Text("Forget") }
+            }
+        }
+    }
+    TextButton(onClick = viewModel::forgetAllCorrections) { Text("Forget everything") }
 }
 
 /** "4 minutes ago", "yesterday" — enough to judge freshness without doing arithmetic. */

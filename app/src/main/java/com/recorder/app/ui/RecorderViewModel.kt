@@ -34,6 +34,7 @@ import android.content.ClipboardManager
 import android.content.Intent
 import com.recorder.app.correction.CorrectionGate
 import com.recorder.app.correction.CorrectionRunner
+import com.recorder.app.correction.SummaryRunner
 import com.recorder.app.export.ExportTarget
 import com.recorder.app.export.Exporter
 import com.recorder.app.models.InstallProgress
@@ -54,6 +55,8 @@ import com.recorder.core.storage.ExportDefaults
 import com.recorder.core.storage.FtsQuery
 import com.recorder.core.storage.HourSummary
 import com.recorder.core.storage.ModelChoice
+import com.recorder.core.storage.SummaryItem
+import com.recorder.core.storage.UserCorrection
 import com.recorder.core.storage.RunningTasks
 import com.recorder.core.storage.latestBySegment
 import java.util.TimeZone
@@ -567,6 +570,60 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     /** Why automatic passes are or are not running right now, in a sentence. */
     fun schedulingStatus(): String = CorrectionGate.describe(getApplication())
+
+    // --- The reviewable summary ------------------------------------------------------------
+
+    /** The items for the open group, if it has been summarised. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val summaryItems: StateFlow<List<SummaryItem>> = AppUiState.openGroup
+        .flatMapLatest { group ->
+            if (group == null || group.kind == GroupKind.ALL) {
+                flowOf(emptyList())
+            } else {
+                db.review().itemsIn(group.fromTs, group.toTs)
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Everything the user has taught it, newest first, for Settings. */
+    val taughtCorrections: StateFlow<List<UserCorrection>> = db.review().corrections()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Builds or rebuilds the items for a group. */
+    fun summarise(group: GroupRef) = viewModelScope.launch(Dispatchers.Default) {
+        _status.value = "Reading it back…"
+        val count = SummaryRunner.summarise(group.fromTs, group.toTs)
+        _status.value = if (count > 0) "$count item(s)" else
+            SummaryRunner.lastError ?: "Nothing to summarise yet."
+    }
+
+    /**
+     * Marks an item wrong. The item stays: it is the evidence a later pass is told about.
+     */
+    fun flagItem(item: SummaryItem) = viewModelScope.launch(Dispatchers.Default) {
+        val wrong = !item.flaggedWrong
+        db.review().flag(item.id, wrong)
+        if (wrong) SummaryRunner.remember(item.display, corrected = "")
+        _status.value = if (wrong) "Marked wrong. The AI will be told." else "Unmarked."
+    }
+
+    /** Replaces an item's text with the user's own, and remembers the substitution. */
+    fun editItem(item: SummaryItem, text: String) = viewModelScope.launch(Dispatchers.Default) {
+        val cleaned = text.trim()
+        db.review().edit(item.id, cleaned.takeIf { it.isNotBlank() })
+        if (cleaned.isNotBlank() && cleaned != item.text) {
+            SummaryRunner.remember(item.text, corrected = cleaned)
+        }
+    }
+
+    fun forgetCorrection(id: Long) = viewModelScope.launch(Dispatchers.Default) {
+        db.review().forget(id)
+    }
+
+    fun forgetAllCorrections() = viewModelScope.launch(Dispatchers.Default) {
+        db.review().forgetAll()
+        _status.value = "Cleared what the AI had been taught."
+    }
 
     /** The whole backlog, now, because the user asked rather than because a timer fired. */
     fun processNow() = viewModelScope.launch(Dispatchers.Default) {

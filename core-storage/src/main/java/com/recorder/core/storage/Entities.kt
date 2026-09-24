@@ -71,9 +71,20 @@ data class SegmentCorrection(
     /** Human-readable name of the model that produced it, e.g. "Qwen 3 4B (on this phone)". */
     @ColumnInfo(name = "engine") val engine: String,
     @ColumnInfo(name = "created_ts") val createdTs: Long = System.currentTimeMillis(),
+    /**
+     * Phrases the draft pass marked and the repair pass could not settle, unit-separated.
+     *
+     * Stored rather than stripped and forgotten. [text] is the clean version, because that
+     * is what gets read and exported, but knowing which words were guessed at is what lets
+     * the review surface point at the lines worth checking instead of all of them.
+     */
+    @ColumnInfo(name = "uncertain", defaultValue = "") val uncertain: String = "",
 ) {
     /** True when the pass looked at the segment and left it as it was. */
     fun unchangedFrom(original: String): Boolean = text.trim() == original.trim()
+
+    val uncertainPhrases: List<String>
+        get() = uncertain.split('\u001f').filter { it.isNotBlank() }
 }
 
 /** Bookkeeping for the end-of-day pass, so a day is only re-run when it has new speech. */

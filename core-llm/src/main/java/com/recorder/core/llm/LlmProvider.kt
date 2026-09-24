@@ -49,6 +49,9 @@ data class TokenBudget(
         /** An open question deserves a real answer, but not an unbounded one. */
         val ANSWER = TokenBudget(maxTokens = 512, deadlineMs = 45_000)
 
+        /** A dozen one-sentence items, and no room to ramble past them. */
+        val SUMMARY = TokenBudget(maxTokens = 384, deadlineMs = 25_000)
+
         /** A transcript line is short; 40 tokens covers a long one with room to spare. */
         private const val TOKENS_PER_LINE = 40
     }

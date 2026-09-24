@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -343,6 +344,17 @@ private fun Lines(viewModel: RecorderViewModel, modifier: Modifier) {
                 TextButton(onClick = viewModel::clearSelection) { Text("${selection.size} selected · clear") }
             }
         }
+        // The summary is its own view of the group, not a filter over the lines, so it comes
+        // before the transcript rendering rather than inside it.
+        if (mode == TextMode.SUMMARY) {
+            group?.let { open ->
+                Column(Modifier.verticalScroll(rememberScrollState()).weight(1f)) {
+                    SummaryList(viewModel, open)
+                }
+            }
+            return@Column
+        }
+
         CorrectionSummary(lines)
 
         if (lines.isEmpty()) {

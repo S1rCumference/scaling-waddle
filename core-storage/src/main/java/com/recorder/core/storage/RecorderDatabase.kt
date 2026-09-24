@@ -16,8 +16,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PendingAction::class,
         SegmentCorrection::class,
         DayPass::class,
+        SummaryItem::class,
+        UserCorrection::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class RecorderDatabase : RoomDatabase() {
@@ -27,6 +29,7 @@ abstract class RecorderDatabase : RoomDatabase() {
     abstract fun pendingActions(): PendingActionDao
     abstract fun corrections(): CorrectionDao
     abstract fun dayPasses(): DayPassDao
+    abstract fun review(): ReviewDao
 
     companion object {
         private const val NAME = "recorder.db"
@@ -40,7 +43,7 @@ abstract class RecorderDatabase : RoomDatabase() {
                     context.applicationContext,
                     RecorderDatabase::class.java,
                     NAME,
-                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
             }
 
         /**
@@ -77,6 +80,42 @@ abstract class RecorderDatabase : RoomDatabase() {
                         "engine TEXT NOT NULL, " +
                         "PRIMARY KEY(day_key))",
                 )
+            }
+        }
+
+        /**
+         * 2 → 3 adds the review tables — the discrete items a pass produces and the
+         * corrections the user makes to them — and a column on segment_corrections for the
+         * phrases a pass was not sure about. Existing rows default to "no marks", which is
+         * the truth for them: they were written before anything was marked.
+         */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE segment_corrections ADD COLUMN uncertain TEXT NOT NULL DEFAULT ''",
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS summary_items (" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "from_ts INTEGER NOT NULL, " +
+                        "to_ts INTEGER NOT NULL, " +
+                        "text TEXT NOT NULL, " +
+                        "edited TEXT, " +
+                        "flagged_wrong INTEGER NOT NULL DEFAULT 0, " +
+                        "uncertain TEXT NOT NULL DEFAULT '', " +
+                        "created_ts INTEGER NOT NULL)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_summary_items_from_ts ON summary_items (from_ts)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_summary_items_created_ts ON summary_items (created_ts)")
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS user_corrections (" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "wrong TEXT NOT NULL, " +
+                        "corrected TEXT NOT NULL, " +
+                        "created_ts INTEGER NOT NULL)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_user_corrections_created_ts ON user_corrections (created_ts)")
             }
         }
     }

@@ -219,6 +219,7 @@ object CorrectionRunner {
                     pass = pass,
                     engine = chosen.label,
                     createdTs = now,
+                    uncertain = it.uncertain.joinToString("\u001f"),
                 )
             },
         )

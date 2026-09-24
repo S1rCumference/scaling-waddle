@@ -13,7 +13,13 @@ import kotlinx.coroutines.flow.update
 
 enum class AppTab(val label: String) { LIVE("Live"), LOGS("Logs"), FLAGS("Flags"), SETTINGS("Settings") }
 
-enum class TextMode(val label: String) { CORRECTED("Corrected"), ORIGINAL("Original"), BOTH("Both") }
+enum class TextMode(val label: String) {
+    /** What the AI understood, as discrete items you can mark wrong or fix. The default. */
+    SUMMARY("Summary"),
+    CORRECTED("Corrected"),
+    ORIGINAL("Original"),
+    BOTH("Both"),
+}
 
 enum class GroupKind { HOUR, DAY, RANGE, ALL }
 
@@ -93,7 +99,7 @@ object AppUiState {
     /** The last tab that was not Settings — what the inner screen shows under its settings panel. */
     val contentTab = MutableStateFlow(AppTab.LIVE)
     val openGroup = MutableStateFlow<GroupRef?>(null)
-    val textMode = MutableStateFlow(TextMode.CORRECTED)
+    val textMode = MutableStateFlow(TextMode.SUMMARY)
 
     /** Ask conversations, one per group ([GroupRef.id]). */
     val conversations = MutableStateFlow<Map<String, List<ChatTurn>>>(emptyMap())
