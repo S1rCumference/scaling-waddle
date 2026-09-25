@@ -1,5 +1,7 @@
 package com.recorder.app.ui
 
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -707,5 +709,30 @@ private fun ExportDefaultsSection(viewModel: RecorderViewModel) {
     Row(Modifier.padding(top = 6.dp)) {
         Button(onClick = { viewModel.openExport() }) { Text("Open Export") }
         TextButton(onClick = viewModel::resetExport) { Text("Reset to defaults") }
+    }
+}
+
+/**
+ * A labelled row of chips, one of which is selected.
+ *
+ * It lived in ExportDialog until 3.0 deleted that file, and it is here rather than in
+ * ExportScreen because this is the only screen left with a one-of-these setting to offer.
+ */
+@Composable
+private fun <T> Choice(label: String, options: List<Pair<String, T>>, selected: T, onSelect: (T) -> Unit) {
+    Column {
+        Text(label, style = MaterialTheme.typography.labelLarge)
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            options.forEach { (text, value) ->
+                FilterChip(
+                    selected = value == selected,
+                    onClick = { onSelect(value) },
+                    label = { Text(text) },
+                )
+            }
+        }
     }
 }
