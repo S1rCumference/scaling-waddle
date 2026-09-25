@@ -26,6 +26,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import com.recorder.app.correction.CorrectionGate
+import com.recorder.app.data.Deletions
 import com.recorder.app.correction.CorrectionRunner
 import com.recorder.app.export.ExportGrouping
 import com.recorder.app.export.ExportQuery
@@ -293,6 +294,50 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     fun clearSelection() {
         AppUiState.selection.value = emptySet()
     }
+
+    // --- Deleting what should not have been recorded ---------------------------------------
+    //
+    // The app captures everything it can, so the way out of a recording you did not want is to
+    // throw it away afterwards: a swipe on one line in Live, or a selection in Logs. Both go
+    // through [Deletions], which is the only thing that writes the three tables involved.
+
+    /** The last delete, while it can still be undone. Drives the Undo offer in the status line. */
+    val undoableDelete: StateFlow<Deletions.Undo?> = Deletions.undo
+
+    /** Swiped away in Live, or a single line anywhere. */
+    fun deleteSegment(id: Long) = deleteSegments(setOf(id))
+
+    /** "Delete n", pressed on a selection in Logs. */
+    fun deleteSelected() {
+        val chosen = AppUiState.selection.value
+        if (chosen.isEmpty()) return
+        clearSelection()
+        deleteSegments(chosen)
+    }
+
+    private fun deleteSegments(ids: Set<Long>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val removed = runCatching { Deletions.delete(ids) }.getOrElse { error ->
+                Diagnostics.w(TAG, "delete failed", error)
+                _status.value = "Could not delete: ${error.message ?: error.javaClass.simpleName}"
+                return@launch
+            }
+            _status.value = when (removed) {
+                0 -> "Nothing to delete."
+                1 -> "Deleted 1 line."
+                else -> "Deleted $removed lines."
+            }
+        }
+    }
+
+    fun undoDelete() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val back = runCatching { Deletions.undoLast() }.getOrDefault(0)
+            _status.value = if (back > 0) "Put $back line(s) back." else "Nothing left to undo."
+        }
+    }
+
+    fun forgetUndo() = Deletions.forget()
 
     /**
      * Corrects one group, now, because the user pressed the button.

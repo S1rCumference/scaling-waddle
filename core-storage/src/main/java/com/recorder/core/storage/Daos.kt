@@ -166,6 +166,27 @@ interface TranscriptDao {
 
     @Query("DELETE FROM transcript_segments WHERE start_ts < :beforeTs")
     suspend fun deleteOlderThan(beforeTs: Long): Int
+
+    /**
+     * Removes chosen lines outright. Returns how many rows went, which is not always
+     * [ids].size: a line can be deleted twice if two screens are looking at the same group.
+     *
+     * The FTS index follows on its own — `transcript_segments_fts` is an external-content
+     * table, so Room's generated sync triggers delete the matching row. The corrections and
+     * flags that point at these segments do not: there is no foreign key, so a caller has to
+     * clear those too, which is what [com.recorder.app.data.Deletions] is for.
+     */
+    @Query("DELETE FROM transcript_segments WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>): Int
+
+    /**
+     * Puts back rows that were just deleted, ids and all.
+     *
+     * REPLACE rather than ABORT so an undo pressed twice is harmless. Keeping the original id
+     * is the whole point: the corrections and flags restored alongside still point at it.
+     */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun restore(segments: List<TranscriptSegment>)
 }
 
 @Dao
@@ -192,6 +213,16 @@ interface FlaggedItemDao {
 
     @Insert
     suspend fun insertAll(items: List<FlaggedItem>): List<Long>
+
+    @Query("SELECT * FROM flagged_items WHERE segment_id IN (:segmentIds)")
+    suspend fun forSegments(segmentIds: List<Long>): List<FlaggedItem>
+
+    /** Drops the flags of deleted lines, so Flags cannot point at text that is gone. */
+    @Query("DELETE FROM flagged_items WHERE segment_id IN (:segmentIds)")
+    suspend fun deleteForSegments(segmentIds: List<Long>): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun restore(items: List<FlaggedItem>)
 }
 
 @Dao
@@ -212,6 +243,13 @@ interface CorrectionDao {
 
     @Query("SELECT * FROM segment_corrections WHERE segment_id IN (:segmentIds) ORDER BY created_ts ASC, id ASC")
     suspend fun forSegments(segmentIds: List<Long>): List<SegmentCorrection>
+
+    /** Drops the corrections of deleted lines. Nothing can reach them once the line is gone. */
+    @Query("DELETE FROM segment_corrections WHERE segment_id IN (:segmentIds)")
+    suspend fun deleteForSegments(segmentIds: List<Long>): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun restore(corrections: List<SegmentCorrection>)
 }
 
 /** Keeps only the newest correction per segment. Input must be oldest first. */

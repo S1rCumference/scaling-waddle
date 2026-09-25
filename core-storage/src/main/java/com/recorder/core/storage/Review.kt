@@ -80,6 +80,13 @@ interface ReviewDao {
     @Query("DELETE FROM summary_items WHERE from_ts >= :fromTs AND to_ts <= :toTs")
     suspend fun clearIn(fromTs: Long, toTs: Long)
 
+    /**
+     * Drops every summary whose span contains [ts] — what a deleted transcript line needs,
+     * because a summary of text that no longer exists is worse than no summary.
+     */
+    @Query("DELETE FROM summary_items WHERE from_ts <= :ts AND to_ts > :ts")
+    suspend fun clearCovering(ts: Long)
+
     @Query("UPDATE summary_items SET edited = :text WHERE id = :id")
     suspend fun edit(id: Long, text: String?)
 

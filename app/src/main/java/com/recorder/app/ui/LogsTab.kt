@@ -346,6 +346,18 @@ private fun Lines(viewModel: RecorderViewModel, modifier: Modifier) {
     val selection by viewModel.selection.collectAsState()
     val group by viewModel.openGroup.collectAsState()
     val state = rememberSharedListState("group:${group?.id}")
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    if (confirmDelete && selection.isNotEmpty()) {
+        ConfirmDelete(
+            count = selection.size,
+            onConfirm = {
+                confirmDelete = false
+                viewModel.deleteSelected()
+            },
+            onDismiss = { confirmDelete = false },
+        )
+    }
 
     Column(modifier) {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -356,6 +368,13 @@ private fun Lines(viewModel: RecorderViewModel, modifier: Modifier) {
                 // A long-press selection opens the same Export screen, pre-filled with it.
                 TextButton(onClick = { viewModel.openExport(onlyIds = selection) }) {
                     Text("Export ${selection.size}")
+                }
+                // Bulk delete: the reason for selecting several lines at once is usually that
+                // a stretch of the day should not have been recorded. One confirmation,
+                // because this is the one destructive thing in the app and a mis-tap here
+                // costs lines rather than a screen.
+                TextButton(onClick = { confirmDelete = true }) {
+                    Text("Delete ${selection.size}", color = MaterialTheme.colorScheme.error)
                 }
                 TextButton(onClick = viewModel::clearSelection) { Text("Clear") }
             }
@@ -450,5 +469,33 @@ private fun CorrectionSummary(lines: List<LineView>) {
         color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.outline,
         fontSize = 12.sp,
         modifier = Modifier.padding(vertical = 2.dp),
+    )
+}
+
+
+/**
+ * The one confirmation in the app.
+ *
+ * Deleting is real — the lines, their corrections and their flags all go — so it asks once,
+ * and says how many. Undo still exists afterwards, from the status line, but only while the
+ * app is running: this is the sentence that has to be right.
+ */
+@Composable
+private fun ConfirmDelete(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (count == 1) "Delete this line?" else "Delete $count lines?") },
+        text = {
+            Text(
+                "They are removed for good, along with any corrections and flags. " +
+                    "Undo is offered for a moment afterwards.",
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("Delete", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Keep") } },
     )
 }

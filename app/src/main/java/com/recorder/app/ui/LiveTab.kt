@@ -185,17 +185,22 @@ private fun LiveFeed(viewModel: RecorderViewModel, modifier: Modifier) {
     }
     LazyColumn(state = listState, modifier = modifier.fillMaxWidth()) {
         items(segments, key = { it.id }) { segment ->
-            Column(Modifier.padding(vertical = 4.dp)) {
-                Text(
-                    Clocks.shortTime(segment.startTs),
-                    color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.outline,
-                    fontSize = 11.sp,
-                )
-                Text(
-                    segment.text,
-                    color = if (compact) Color.White else MaterialTheme.colorScheme.onBackground,
-                    fontSize = 16.sp,
-                )
+            // Swipe it away when it heard something that should not have been kept. This is
+            // the fastest route out of an over-capturing recorder, so it is on the live feed
+            // where the line is still in front of you rather than buried in Logs.
+            SwipeToDelete(onDelete = { viewModel.deleteSegment(segment.id) }) {
+                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    Text(
+                        Clocks.shortTime(segment.startTs),
+                        color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.outline,
+                        fontSize = 11.sp,
+                    )
+                    Text(
+                        segment.text,
+                        color = if (compact) Color.White else MaterialTheme.colorScheme.onBackground,
+                        fontSize = 16.sp,
+                    )
+                }
             }
         }
     }

@@ -175,11 +175,28 @@ private fun CompactShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) {
     Column(Modifier.fillMaxSize().background(Color.Black).padding(horizontal = 8.dp, vertical = 6.dp)) {
         CoverStatusBar(viewModel)
         status?.let { message ->
+            val undoable by viewModel.undoableDelete.collectAsState()
             LaunchedEffect(message) {
-                delay(2_500)
+                delay(if (undoable != null) UNDO_WINDOW_MS else STATUS_MS)
+                if (viewModel.undoableDelete.value != null) viewModel.forgetUndo()
                 viewModel.clearStatus()
             }
-            Text(message, color = CoverColors.live, fontSize = 13.sp, modifier = Modifier.padding(vertical = 2.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    message,
+                    color = CoverColors.live,
+                    fontSize = 13.sp,
+                    maxLines = 2,
+                    modifier = Modifier.weight(1f).padding(vertical = 2.dp),
+                )
+                // No snackbar on the cover screen — there is no room for one — so the undo
+                // sits beside the message for as long as the message is up.
+                if (undoable != null) {
+                    TextButton(onClick = { viewModel.undoDelete() }) {
+                        Text("Undo", color = CoverColors.live, fontSize = 13.sp)
+                    }
+                }
+            }
         }
         BusyBar(viewModel)
         Box(Modifier.weight(1f)) {
@@ -270,9 +287,23 @@ private fun ExpandedShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
     val progress by viewModel.correctionProgress.collectAsState()
     val snackbar = androidx.compose.runtime.remember { SnackbarHostState() }
 
+    // A delete offers Undo on the same snackbar that carries the message. That is the only
+    // window there is: the removed rows are held in memory and nowhere else, so the offer
+    // disappears when the snackbar does.
+    val undoable by viewModel.undoableDelete.collectAsState()
     LaunchedEffect(status) {
-        status?.let {
-            snackbar.showSnackbar(it)
+        status?.let { message ->
+            val undo = viewModel.undoableDelete.value != null
+            val result = snackbar.showSnackbar(
+                message = message,
+                actionLabel = if (undo) "Undo" else null,
+                withDismissAction = undo,
+            )
+            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                viewModel.undoDelete()
+            } else if (undo) {
+                viewModel.forgetUndo()
+            }
             viewModel.clearStatus()
         }
     }
@@ -440,3 +471,9 @@ fun EmptyState(message: String) {
         )
     }
 }
+
+/** How long a message stays on the cover screen when there is nothing to act on. */
+private const val STATUS_MS = 2_500L
+
+/** Longer when an Undo is attached, because reading it and reaching for it takes longer. */
+private const val UNDO_WINDOW_MS = 6_000L
