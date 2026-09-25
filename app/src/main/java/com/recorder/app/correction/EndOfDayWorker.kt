@@ -61,8 +61,7 @@ class EndOfDayWorker(context: Context, params: WorkerParameters) : CoroutineWork
         }
 
         // Not holding the weights once the phone is left alone for the night.
-        ServiceLocator.providers.correctionProvider().provider
-            .let { it as? com.recorder.core.llm.local.LocalModelProvider }?.unload()
+        ServiceLocator.correctionProvider.unload()
         return Result.success()
     }
 

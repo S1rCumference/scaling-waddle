@@ -144,7 +144,6 @@ fun RecorderApp(viewModel: RecorderViewModel, onRunSetup: () -> Unit) {
         } else {
             RecorderTheme { ExpandedShell(viewModel, onRunSetup) }
         }
-        CapabilitiesDialog(viewModel)
     }
 }
 

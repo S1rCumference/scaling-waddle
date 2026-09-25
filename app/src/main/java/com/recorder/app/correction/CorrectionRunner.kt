@@ -165,8 +165,7 @@ object CorrectionRunner {
         )
         Diagnostics.i(
             TAG,
-            "$what: ${segments.size} line(s) in ${windows.size} window(s), " +
-                "${if (cloud) "cloud" else "on device"}",
+            "$what: ${segments.size} line(s) in ${windows.size} window(s), on device",
         )
         try {
             windows.forEachIndexed { index, targets ->

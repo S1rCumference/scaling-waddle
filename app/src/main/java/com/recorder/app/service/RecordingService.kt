@@ -221,7 +221,6 @@ class RecordingService : Service() {
             val pipeline = TranscriptPipeline(
                 asr = engine,
                 transcripts = ServiceLocator.database.transcripts(),
-                folders = ServiceLocator.database.folders(),
                 keywordWatcher = KeywordWatcher(
                     ServiceLocator.database.flagged(),
                     ServiceLocator.settings,
