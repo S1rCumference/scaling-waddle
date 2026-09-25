@@ -12,6 +12,12 @@ sealed interface LocalModelChoice {
     data object Small : LocalModelChoice
     data object Heavy : LocalModelChoice
     data object Strongest : LocalModelChoice
+
+    /**
+     * The smallest model installed that will run. For work that is mechanical rather than
+     * clever, where finishing quickly is the whole value.
+     */
+    data object Smallest : LocalModelChoice
     data class File(val fileName: String) : LocalModelChoice
 }
 
@@ -93,6 +99,28 @@ class LocalModelSelector(private val context: Context) {
         }
     }
 
+    /**
+     * The smallest installed model that fits, ignoring tiers entirely.
+     *
+     * Correcting a transcript is not a task that rewards a bigger model: it is substituting
+     * words the speech model misheard, with the surrounding lines as context. Asking a 2.5 GB
+     * model to do it — which is what "the strongest that fits" meant while the phone was
+     * plugged in, and the overnight pass only runs while it is plugged in — cost minutes per
+     * batch to produce nearly the same text a 0.81 GB model produces in seconds.
+     */
+    fun selectSmallestModel(): LocalModelSpec? {
+        if (!LocalModelRuntime.available) return null
+        if (DeviceCapabilities.isLowMemory(context)) return null
+        val free = DeviceCapabilities.availableRamMb(context)
+        return smallModelCandidates()
+            .filter { it.exists && free >= it.requiredFreeMb }
+            .minByOrNull { it.requiredFreeMb }
+            .also { chosen ->
+                if (chosen == null) Log.i(TAG, "no model fits at all (${free}MB free)")
+                else Log.i(TAG, "selected the smallest installed model: ${chosen.label}")
+            }
+    }
+
     fun selectSmallModel(): LocalModelSpec? {
         if (!LocalModelRuntime.available) return null
         if (DeviceCapabilities.isLowMemory(context)) {
@@ -147,6 +175,7 @@ class LocalModelSelector(private val context: Context) {
         LocalModelChoice.Small -> selectSmallModel()
         LocalModelChoice.Heavy -> selectHeavyModel()
         LocalModelChoice.Strongest -> selectStrongest()
+        LocalModelChoice.Smallest -> selectSmallestModel()
         is LocalModelChoice.File -> selectFile(choice.fileName)
     }
 
@@ -164,6 +193,8 @@ class LocalModelSelector(private val context: Context) {
             append(DeviceCapabilities.availableRamMb(context)).append(" MB free now\n")
             append("All day: ").append(allDay?.label ?: "none").append(' ')
             append(if (allDay?.exists == true) "· installed" else "· not installed").append('\n')
+            append("Corrections: ").append(selectSmallestModel()?.label ?: "none that fits")
+            append(" · smallest installed, because correction is mechanical\n")
             append("Charging only: ").append(heavy?.label ?: "none on this tier")
             if (heavy != null) {
                 append(if (heavy.exists) " · installed" else " · not installed")

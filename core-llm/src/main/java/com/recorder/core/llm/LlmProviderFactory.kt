@@ -79,14 +79,22 @@ class LlmProviderFactory(
     }
 
     /**
-     * What corrects transcripts. Local by default — the strongest model the phone can hold
-     * beside recording. The cloud is used only when chosen *and* consented to.
+     * What corrects transcripts. Local by default, and deliberately the *smallest* installed
+     * model rather than the strongest.
+     *
+     * It used to ask for the strongest that fits, which meant the 2.5 GB model whenever the
+     * phone was plugged in — and the automatic pass only runs while it is plugged in, so that
+     * was the normal case, not the exception. Correction is substituting words the speech
+     * model misheard using the neighbouring lines as context; it is mechanical work where
+     * finishing is the value, and a 0.81 GB model does it in a fraction of the time for
+     * output that is not meaningfully different. The bigger models remain available by hand
+     * in Settings, and are still what answers questions and writes summaries.
      */
     suspend fun correctionProvider(): Chosen {
         if (settings.correctionEngine.first() == ModelChoice.CLOUD) {
             consentedCloudProvider()?.let { return Chosen(it, cloudLabel(), cloud = true) }
         }
-        val choice = localChoice(settings.correctionModel.first(), LocalModelChoice.Strongest)
+        val choice = localChoice(settings.correctionModel.first(), LocalModelChoice.Smallest)
         val local = local(choice, maxTokens = CORRECTION_MAX_TOKENS)
         return Chosen(local, localLabel(local), cloud = false)
     }

@@ -208,6 +208,13 @@ class RecordingService : Service() {
             }
             vad = detector
             detectorName = "${detector.activeName} at $threshold"
+            // What the detector worked out about itself at load, in front of the user now
+            // rather than after the first heartbeat a minute later. On a phone with no
+            // computer attached, a minute is long enough to conclude the app is broken.
+            detector.note()?.let {
+                detectorNote = it
+                Diagnostics.i(TAG, it)
+            }
             asr = engine
             heartbeat()
 

@@ -705,7 +705,7 @@ private fun ModelsSection(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
 
     Choice(
         "Correction model",
-        listOf("Best that fits (auto)" to ModelChoice.AUTO) + localOptions +
+        listOf("Smallest installed (auto)" to ModelChoice.AUTO) + localOptions +
             listOf(cloudNote to ModelChoice.CLOUD),
         if (correctionEngine == ModelChoice.CLOUD) ModelChoice.CLOUD else correctionModel,
     ) { choice ->
@@ -723,8 +723,11 @@ private fun ModelsSection(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
         askModel,
     ) { viewModel.setAskModel(it) }
     Text(
-        "\"Auto\" uses the charging-only model when the phone is plugged in and the all-day " +
-            "model otherwise. Cloud choices only take effect while Cloud AI is switched on.",
+        "Correction on \"Auto\" uses the smallest model installed: it is substituting misheard " +
+            "words using the neighbouring lines, which a 1B model does in seconds and a 4B " +
+            "model does no better in minutes. Ask on \"Auto\" uses the all-day model, or the " +
+            "charging-only model while plugged in. Cloud choices only take effect while Cloud " +
+            "AI is switched on.",
         style = MaterialTheme.typography.bodySmall,
     )
 
