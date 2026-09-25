@@ -397,6 +397,18 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /** Models from an earlier version still on disk, as one line, or null when there are none. */
+    fun strayModels(): String? {
+        val stray = ModelHealth.strayModelFiles(getApplication<Application>())
+        if (stray.isEmpty()) return null
+        val mb = stray.sumOf { it.length() } / (1024 * 1024)
+        return "${stray.size} model(s) from an earlier version are still here, using about $mb MB."
+    }
+
+    fun removeStrayModels() = viewModelScope.launch(Dispatchers.IO) {
+        _repairReport.value = ModelHealth.removeStrayModelFiles(getApplication<Application>())
+    }
+
     /** Leaves safe mode and starts recording, at the user's request. */
     fun leaveSafeMode() {
         val context = getApplication<Application>()

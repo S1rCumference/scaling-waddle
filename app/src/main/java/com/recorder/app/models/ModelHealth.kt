@@ -1,6 +1,7 @@
 package com.recorder.app.models
 
 import android.content.Context
+import com.recorder.core.llm.local.LocalModelRuntime
 import com.recorder.core.storage.Diagnostics
 
 /**
@@ -40,6 +41,39 @@ object ModelHealth {
             ?.firstOrNull { it.fileName == file.name }
             ?: return null
         return entry.installProblem(context)
+    }
+
+    /**
+     * Model files on disk that the manifest no longer mentions, with their sizes.
+     *
+     * 3.0 dropped two of the three language models, and an install over the top does not
+     * remove their weights — they are app-private files nothing in the catalogue points at any
+     * more. On this project's phone that is about 3.5 GB of dead space that no code would ever
+     * touch again, so it is offered for removal rather than left to be discovered.
+     */
+    fun strayModelFiles(context: Context): List<java.io.File> {
+        val known = runCatching { ModelCatalog.load(context) }
+            .getOrDefault(emptyList())
+            .map { it.fileName }
+            .toSet()
+        val dir = LocalModelRuntime.modelDir(context)
+        return dir.listFiles()
+            ?.filter { it.isFile && it.name.endsWith(".gguf") && it.name !in known }
+            ?.sortedByDescending { it.length() }
+            .orEmpty()
+    }
+
+    /** Removes them, and says what was freed. Only ever from an explicit request. */
+    fun removeStrayModelFiles(context: Context): String {
+        val stray = strayModelFiles(context)
+        if (stray.isEmpty()) return "No models from an earlier version are left on this phone."
+        val bytes = stray.sumOf { it.length() }
+        val names = stray.map { it.name }
+        stray.forEach { file ->
+            if (file.delete()) Diagnostics.i(TAG, "removed ${file.name}, freeing ${file.length()} bytes")
+        }
+        return "Removed ${names.size} model(s) no longer used — about " +
+            "${bytes / (1024 * 1024)} MB: ${names.joinToString(", ")}"
     }
 
     /**

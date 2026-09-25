@@ -586,6 +586,14 @@ private fun ModelFileCheck(viewModel: RecorderViewModel) {
         TextButton(onClick = { survey = viewModel.modelSurvey() }) { Text("Check files") }
         TextButton(onClick = viewModel::repairModels) { Text("Remove unfinished") }
     }
+    // 3.0 dropped two of the three language models. An install over the top leaves their
+    // weights behind, and nothing in the catalogue points at them any more, so they are
+    // offered for removal rather than left to be found.
+    val stray = remember(repaired) { viewModel.strayModels() }
+    stray?.let { line ->
+        Text(line, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
+        TextButton(onClick = viewModel::removeStrayModels) { Text("Remove them") }
+    }
     survey?.let { rows ->
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(8.dp)) {

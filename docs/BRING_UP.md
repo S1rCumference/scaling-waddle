@@ -80,15 +80,21 @@ adb logcat -s RecordingService AsrEngineFactory SherpaAsrEnginePlugin
 
 Also check **Flagged**: "remind me" should have produced a flag.
 
-## 5. The assistant
+## 5. Correction and export
 
-1. **Ask** tab → "what did I say about the supplier".
+1. Open a group in **Logs** → **Correct this group**.
 
-Expected, if a chat model was installed: an answer quoting the line. If not installed, a clear
-statement saying so.
+Expected: a progress line with a Cancel button, then a count of corrected lines. Switch the
+group to **Corrected** or **Both** to see them; the original is always kept.
 
-**Airplane mode on, then ask again.** It must still answer — that is the whole point. If it
-fails only in airplane mode, something is reaching the network that should not be.
+2. **Logs → Export** → Today → Markdown → Copy to clipboard.
+
+Expected: a match count and size above the button, and text on the clipboard with a heading per
+day and a timestamp per line.
+
+**Airplane mode on, then do both again.** They must still work — that is the whole point. There
+is no cloud path in 3.0 at all, so a failure that only happens with the radio off would mean
+something is reaching the network that should not be.
 
 ## 6. Cover screen
 
