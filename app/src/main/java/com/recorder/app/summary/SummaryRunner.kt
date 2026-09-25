@@ -80,6 +80,12 @@ object SummaryRunner {
     var lastError: String? = null
         private set
 
+    /**
+     * Summaries stored by the run in progress, so a run that hits the ceiling can say how far it
+     * got. Only ever touched under [lock], which is what makes a plain var safe here.
+     */
+    private var written = 0
+
     private val db get() = ServiceLocator.database
 
     // --- one group, because the user asked for it -------------------------------------------
@@ -97,10 +103,20 @@ object SummaryRunner {
             "Summarising ${group.title()}",
             cancel = currentCoroutineContext()[Job]?.let { job -> { job.cancel() } },
         )
+        written = 0
         try {
             val result = withTimeoutOrNull(DAY_ROLLUP_DEADLINE_MS) { summarise(group, fillGaps = true) }
             if (result == null && lastError == null) {
-                lastError = "Summarising ran past ${DAY_ROLLUP_DEADLINE_MS / 60_000} minutes and stopped."
+                // Say what it got through. Summarising a month that has nothing under it yet is
+                // hundreds of calls and will hit this ceiling — but the parts it finished are
+                // stored, so pressing it again carries on rather than starting over, and saying
+                // only "it stopped" would read as having achieved nothing.
+                val ceiling = "${DAY_ROLLUP_DEADLINE_MS / 60_000} minutes"
+                lastError = if (written > 0) {
+                    "Stopped at $ceiling with $written part(s) done. Press Summarise again to carry on."
+                } else {
+                    "Summarising ran past $ceiling and stopped."
+                }
                 Diagnostics.w(TAG, "${group.title()}: $lastError")
             }
             result
@@ -124,19 +140,19 @@ object SummaryRunner {
      */
     suspend fun runDay(dayKey: Int): Int = lock.withLock {
         val day = GroupRef.day(dayKey)
-        var written = 0
         RunningTasks.start(
             TASK,
             "Summarising ${day.title()}",
             cancel = currentCoroutineContext()[Job]?.let { job -> { job.cancel() } },
         )
+        written = 0
         try {
             val finished = withTimeoutOrNull(DAY_ROLLUP_DEADLINE_MS) {
-                written += summariseHours(dayKey)
-                if (summarise(day, fillGaps = false) != null) written++
+                summariseHours(dayKey)
+                summarise(day, fillGaps = false)
                 // The month is rewritten every night rather than once at the end of it, so the
                 // month row in Logs is never blank and never a month out of date.
-                if (summarise(GroupRef.month(dayKey / 100), fillGaps = false) != null) written++
+                summarise(GroupRef.month(dayKey / 100), fillGaps = false)
                 true
             }
             if (finished == null) {
@@ -151,20 +167,18 @@ object SummaryRunner {
         }
     }
 
-    /** Every hour of [dayKey] with enough speech to be a topic. Returns how many were written. */
-    private suspend fun summariseHours(dayKey: Int): Int {
+    /** Every hour of [dayKey] with enough speech in it to be a topic. */
+    private suspend fun summariseHours(dayKey: Int) {
         val offset = TimeZone.getDefault().getOffset(DayKey.startOf(dayKey)).toLong()
         val hours = db.transcripts()
             .hourSummaries(DayKey.startOf(dayKey), DayKey.endOf(dayKey), offset)
             .first()
             .filter { it.count >= MIN_LINES_FOR_HOUR }
-        var written = 0
         hours.forEachIndexed { index, hour ->
             _progress.value = "Summarising hour ${index + 1} of ${hours.size}"
             RunningTasks.update(TASK, "hour ${index + 1} of ${hours.size}")
-            if (summarise(GroupRef.hour(hour.firstTs), fillGaps = false) != null) written++
+            summarise(GroupRef.hour(hour.firstTs), fillGaps = false)
         }
-        return written
     }
 
     // --- the one place a summary is produced -------------------------------------------------
@@ -237,6 +251,7 @@ object SummaryRunner {
             ),
         )
         lastError = null
+        written++
         Diagnostics.i(
             TAG,
             "${group.title()}: \"${summary.title}\" from ${source.size} source(s) in " +
