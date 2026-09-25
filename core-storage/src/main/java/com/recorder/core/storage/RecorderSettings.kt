@@ -191,6 +191,60 @@ class RecorderSettings(private val context: Context) {
         it[Keys.LAST_RUN_LINES] = lines
     }
 
+    // --- the export screen's settings, which are the next export's defaults ---------------
+
+    val exportRange: Flow<String> = context.dataStore.data.map { it[Keys.EXPORT_RANGE] ?: "today" }
+    val exportCustomFrom: Flow<Int> = context.dataStore.data.map { it[Keys.EXPORT_FROM_DAY] ?: 0 }
+    val exportCustomTo: Flow<Int> = context.dataStore.data.map { it[Keys.EXPORT_TO_DAY] ?: 0 }
+
+    /** -1 means no time-of-day window, which is the default. */
+    val exportWindowStart: Flow<Int> = context.dataStore.data.map { it[Keys.EXPORT_WINDOW_START] ?: -1 }
+    val exportWindowEnd: Flow<Int> = context.dataStore.data.map { it[Keys.EXPORT_WINDOW_END] ?: -1 }
+    val exportInclude: Flow<String> = context.dataStore.data.map { it[Keys.EXPORT_INCLUDE] ?: "" }
+    val exportExclude: Flow<String> = context.dataStore.data.map { it[Keys.EXPORT_EXCLUDE] ?: "" }
+    val exportIncludeAll: Flow<Boolean> = context.dataStore.data.map { it[Keys.EXPORT_INCLUDE_ALL] ?: false }
+    val exportGrouping: Flow<String> = context.dataStore.data.map { it[Keys.EXPORT_GROUPING] ?: "day" }
+    val exportDestination: Flow<String> = context.dataStore.data.map { it[Keys.EXPORT_DESTINATION] ?: ExportDestinations.SHARE }
+
+    suspend fun saveExport(
+        range: String,
+        customFromDay: Int,
+        customToDay: Int,
+        windowStart: Int,
+        windowEnd: Int,
+        include: String,
+        exclude: String,
+        includeAll: Boolean,
+        content: String,
+        format: String,
+        grouping: String,
+        destination: String,
+    ) = edit {
+        it[Keys.EXPORT_RANGE] = range
+        it[Keys.EXPORT_FROM_DAY] = customFromDay
+        it[Keys.EXPORT_TO_DAY] = customToDay
+        it[Keys.EXPORT_WINDOW_START] = windowStart
+        it[Keys.EXPORT_WINDOW_END] = windowEnd
+        it[Keys.EXPORT_INCLUDE] = include
+        it[Keys.EXPORT_EXCLUDE] = exclude
+        it[Keys.EXPORT_INCLUDE_ALL] = includeAll
+        it[Keys.EXPORT_CONTENT] = content
+        it[Keys.EXPORT_FORMAT] = format
+        it[Keys.EXPORT_GROUPING] = grouping
+        it[Keys.EXPORT_DESTINATION] = destination
+    }
+
+    /** Back to the shipped defaults, for the Reset button. */
+    suspend fun resetExport() = edit {
+        listOf(
+            Keys.EXPORT_RANGE, Keys.EXPORT_FROM_DAY, Keys.EXPORT_TO_DAY,
+            Keys.EXPORT_WINDOW_START, Keys.EXPORT_WINDOW_END,
+            Keys.EXPORT_INCLUDE, Keys.EXPORT_EXCLUDE, Keys.EXPORT_INCLUDE_ALL,
+            Keys.EXPORT_CONTENT, Keys.EXPORT_FORMAT, Keys.EXPORT_GROUPING,
+            Keys.EXPORT_DESTINATION,
+        ).forEach { key -> it.remove(key) }
+    }
+
     suspend fun setVadThreshold(threshold: Float) = edit {
         it[Keys.VAD_THRESHOLD] = threshold.coerceIn(0.05f, 0.95f)
     }
@@ -225,6 +279,16 @@ class RecorderSettings(private val context: Context) {
         val ASK_MODEL = stringPreferencesKey("ask_model")
         val EXPORT_CONTENT = stringPreferencesKey("export_content")
         val EXPORT_FORMAT = stringPreferencesKey("export_format")
+        val EXPORT_RANGE = stringPreferencesKey("export_range")
+        val EXPORT_FROM_DAY = intPreferencesKey("export_from_day")
+        val EXPORT_TO_DAY = intPreferencesKey("export_to_day")
+        val EXPORT_WINDOW_START = intPreferencesKey("export_window_start")
+        val EXPORT_WINDOW_END = intPreferencesKey("export_window_end")
+        val EXPORT_INCLUDE = stringPreferencesKey("export_include")
+        val EXPORT_EXCLUDE = stringPreferencesKey("export_exclude")
+        val EXPORT_INCLUDE_ALL = booleanPreferencesKey("export_include_all")
+        val EXPORT_GROUPING = stringPreferencesKey("export_grouping")
+        val EXPORT_DESTINATION = stringPreferencesKey("export_destination")
     }
 
     companion object {
@@ -265,6 +329,39 @@ object ExportDefaults {
     const val CONTENT_BOTH = "both"
     const val FORMAT_MARKDOWN = "markdown"
     const val FORMAT_TEXT = "text"
+    const val FORMAT_CSV = "csv"
+    const val FORMAT_JSONL = "jsonl"
+
+    val formats = listOf(FORMAT_MARKDOWN, FORMAT_TEXT, FORMAT_CSV, FORMAT_JSONL)
+    val contents = listOf(CONTENT_CORRECTED, CONTENT_ORIGINAL, CONTENT_BOTH)
+
+    fun formatLabel(value: String): String = when (value) {
+        FORMAT_MARKDOWN -> "Markdown"
+        FORMAT_TEXT -> "Plain text"
+        FORMAT_CSV -> "CSV"
+        else -> "JSON Lines"
+    }
+
+    fun contentLabel(value: String): String = when (value) {
+        CONTENT_ORIGINAL -> "Original"
+        CONTENT_BOTH -> "Both"
+        else -> "Corrected"
+    }
+}
+
+/** Where an export goes. Stored, so the last choice is the next default. */
+object ExportDestinations {
+    const val SHARE = "share"
+    const val DOWNLOADS = "downloads"
+    const val CLIPBOARD = "clipboard"
+
+    val all = listOf(SHARE, DOWNLOADS, CLIPBOARD)
+
+    fun label(value: String): String = when (value) {
+        DOWNLOADS -> "Save to Downloads"
+        CLIPBOARD -> "Copy to clipboard"
+        else -> "Share…"
+    }
 }
 
 /** The last automatic or on-demand AI pass, for the status line in Settings. */

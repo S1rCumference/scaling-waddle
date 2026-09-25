@@ -88,6 +88,9 @@ object AppUiState {
     /** Segments picked for a partial export, in the open group. */
     val selection = MutableStateFlow<Set<Long>>(emptySet())
 
+    /** Whether the Export screen is over whatever was being looked at. */
+    val showExport = MutableStateFlow(false)
+
     /** Which Settings section is expanded. */
     val settingsSection = MutableStateFlow<String?>(null)
 

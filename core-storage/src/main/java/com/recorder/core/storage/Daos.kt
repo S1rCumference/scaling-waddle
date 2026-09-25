@@ -186,6 +186,10 @@ interface FlaggedItemDao {
     @Query("UPDATE flagged_items SET dismissed = 1 WHERE id = :id")
     suspend fun dismiss(id: Long)
 
+    /** Which of [segmentIds] were ever flagged, for the export's flagged column. */
+    @Query("SELECT DISTINCT segment_id FROM flagged_items WHERE segment_id IN (:segmentIds)")
+    suspend fun flaggedAmong(segmentIds: List<Long>): List<Long>
+
     @Insert
     suspend fun insertAll(items: List<FlaggedItem>): List<Long>
 }

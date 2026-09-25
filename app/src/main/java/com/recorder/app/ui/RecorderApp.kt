@@ -169,6 +169,7 @@ private fun TabContent(viewModel: RecorderViewModel, tab: AppTab, onRunSetup: ()
 @Composable
 private fun CompactShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) {
     val tab by viewModel.tab.collectAsState()
+    val showExport by AppUiState.showExport.collectAsState()
     val status by viewModel.status.collectAsState()
 
     Column(Modifier.fillMaxSize().background(Color.Black).padding(horizontal = 8.dp, vertical = 6.dp)) {
@@ -181,7 +182,10 @@ private fun CompactShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) {
             Text(message, color = CoverColors.live, fontSize = 13.sp, modifier = Modifier.padding(vertical = 2.dp))
         }
         BusyBar(viewModel)
-        Box(Modifier.weight(1f)) { TabContent(viewModel, tab, onRunSetup) }
+        Box(Modifier.weight(1f)) {
+            if (showExport) ExportScreen(viewModel, viewModel::closeExport)
+            else TabContent(viewModel, tab, onRunSetup)
+        }
         CompactTabs(tab, viewModel.flagged.collectAsState().value.size) {
             viewModel.selectTab(it)
         }
@@ -260,6 +264,7 @@ private fun CompactTabs(current: AppTab, flagCount: Int, onSelect: (AppTab) -> U
 @Composable
 private fun ExpandedShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) {
     val tab by viewModel.tab.collectAsState()
+    val showExport by AppUiState.showExport.collectAsState()
     val status by viewModel.status.collectAsState()
     val recorderState by viewModel.recorderState.collectAsState()
     val progress by viewModel.correctionProgress.collectAsState()
@@ -323,7 +328,13 @@ private fun ExpandedShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
             Column(Modifier.padding(padding).fillMaxSize()) {
                 SafeModeBanner(viewModel)
                 BusyBar(viewModel)
-                Box(Modifier.fillMaxSize()) { TabContent(viewModel, underneath, onRunSetup) }
+                Box(Modifier.fillMaxSize()) {
+                    if (showExport) {
+                        Surface(Modifier.fillMaxSize()) { ExportScreen(viewModel, viewModel::closeExport) }
+                    } else {
+                        TabContent(viewModel, underneath, onRunSetup)
+                    }
+                }
             }
         }
 

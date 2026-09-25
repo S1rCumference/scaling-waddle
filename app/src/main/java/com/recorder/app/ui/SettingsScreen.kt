@@ -697,24 +697,15 @@ private fun CorrectionSection(viewModel: RecorderViewModel) {
 
 @Composable
 private fun ExportDefaultsSection(viewModel: RecorderViewModel) {
-    val content by viewModel.exportContent.collectAsState()
-    val format by viewModel.exportFormat.collectAsState()
-    Choice(
-        "Text",
-        listOf(
-            "Corrected" to ExportDefaults.CONTENT_CORRECTED,
-            "Original" to ExportDefaults.CONTENT_ORIGINAL,
-            "Both" to ExportDefaults.CONTENT_BOTH,
-        ),
-        content,
-    ) { viewModel.setExportDefaults(it, format) }
-    Choice(
-        "Format",
-        listOf("Markdown" to ExportDefaults.FORMAT_MARKDOWN, "Plain text" to ExportDefaults.FORMAT_TEXT),
-        format,
-    ) { viewModel.setExportDefaults(content, it) }
     Text(
-        "Saved files go to Download/Recorder/. Share opens Android's share sheet.",
+        "Every export setting — the date range, the time-of-day window, the keywords, the " +
+            "format, the grouping and where the file goes — is remembered on the Export " +
+            "screen itself and used as the next export's defaults. There is nothing to set " +
+            "here that is not set better there, with a live match count beside it.",
         style = MaterialTheme.typography.bodySmall,
     )
+    Row(Modifier.padding(top = 6.dp)) {
+        Button(onClick = { viewModel.openExport() }) { Text("Open Export") }
+        TextButton(onClick = viewModel::resetExport) { Text("Reset to defaults") }
+    }
 }

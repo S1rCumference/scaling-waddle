@@ -28,8 +28,11 @@ import android.content.ClipboardManager
 import android.content.Intent
 import com.recorder.app.correction.CorrectionGate
 import com.recorder.app.correction.CorrectionRunner
-import com.recorder.app.export.ExportTarget
+import com.recorder.app.export.ExportGrouping
+import com.recorder.app.export.ExportQuery
+import com.recorder.app.export.ExportRange
 import com.recorder.app.export.Exporter
+import com.recorder.app.export.TimeWindow
 import com.recorder.app.models.InstallProgress
 import com.recorder.app.models.ModelCatalog
 import com.recorder.app.models.ModelDownloadService
@@ -54,9 +57,11 @@ import com.recorder.core.storage.latestBySegment
 import java.util.TimeZone
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -72,6 +77,7 @@ import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class RecorderViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -402,26 +408,153 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     suspend fun segmentsByIds(ids: List<Long>): Map<Long, TranscriptSegment> =
         ids.distinct().chunked(900).flatMap { db.transcripts().byIds(it) }.associateBy { it.id }
 
-    // --- Export ---
+    // --- Export ------------------------------------------------------------------------
 
-    val exportContent: StateFlow<String> =
-        settings.exportContent.stateIn(viewModelScope, SharingStarted.Eagerly, ExportDefaults.CONTENT_CORRECTED)
-    val exportFormat: StateFlow<String> =
-        settings.exportFormat.stateIn(viewModelScope, SharingStarted.Eagerly, ExportDefaults.FORMAT_MARKDOWN)
+    private val _exportQuery = MutableStateFlow(ExportQuery())
 
-    /** Exports a group, a range, or — when [onlyIds] is given — just those lines. */
-    fun export(
-        title: String,
-        fromTs: Long,
-        toTs: Long,
-        onlyIds: Set<Long>?,
-        content: String,
-        format: String,
-        target: ExportTarget,
-    ) = viewModelScope.launch {
-        val lines = if (onlyIds.isNullOrEmpty()) Exporter.linesFor(fromTs, toTs) else Exporter.linesForIds(onlyIds)
-        _status.value = Exporter.export(getApplication(), title, lines, content, format, target)
+    /** Everything the export screen is showing. One object, so nothing can disagree. */
+    val exportQuery: StateFlow<ExportQuery> = _exportQuery.asStateFlow()
+
+    private val _exportPreview = MutableStateFlow<Exporter.Preview?>(null)
+
+    /** The live match count and estimated size, or null while it is being counted. */
+    val exportPreview: StateFlow<Exporter.Preview?> = _exportPreview.asStateFlow()
+
+    /**
+     * Restores the remembered settings once, so opening Export shows what was used last.
+     *
+     * Read rather than collected: after this the screen's own state is the truth, and a late
+     * DataStore emission overwriting what someone has just typed is a bug, not a feature.
+     */
+    private fun loadExportDefaults() = viewModelScope.launch {
+        val start = settings.exportWindowStart.first()
+        val end = settings.exportWindowEnd.first()
+        _exportQuery.update { current ->
+            current.copy(
+                range = settings.exportRange.first(),
+                customFromDay = settings.exportCustomFrom.first(),
+                customToDay = settings.exportCustomTo.first(),
+                timeWindow = if (start >= 0 && end >= 0) TimeWindow(start, end) else null,
+                includeField = settings.exportInclude.first(),
+                excludeField = settings.exportExclude.first(),
+                includeAll = settings.exportIncludeAll.first(),
+                content = settings.exportContent.first(),
+                format = settings.exportFormat.first(),
+                grouping = settings.exportGrouping.first(),
+                destination = settings.exportDestination.first(),
+            )
+        }
+    }
+
+    /**
+     * Opens the screen. [onlyIds] comes from a long-press selection; a group passes its own
+     * range as a custom range, so what is being exported is visible and adjustable rather
+     * than implied by which screen it was opened from.
+     */
+    fun openExport(group: GroupRef? = null, onlyIds: Set<Long> = emptySet()) {
+        loadExportDefaults()
+        if (group != null || onlyIds.isNotEmpty()) {
+            _exportQuery.update { current ->
+                current.copy(
+                    onlyIds = onlyIds,
+                    range = if (onlyIds.isEmpty() && group != null) ExportRange.CUSTOM else current.range,
+                    customFromDay = group?.let { DayKey.of(it.fromTs) } ?: current.customFromDay,
+                    customToDay = group?.let { DayKey.of(it.toTs) } ?: current.customToDay,
+                )
+            }
+        }
+        AppUiState.showExport.value = true
+        recountExport()
+    }
+
+    fun closeExport() {
+        AppUiState.showExport.value = false
+    }
+
+    fun clearExportSelection() = editExport { it.copy(onlyIds = emptySet()) }
+
+    fun setExportRange(value: String) = editExport { it.copy(range = value) }
+    fun setExportCustomFrom(day: Int) = editExport { it.copy(customFromDay = day) }
+    fun setExportCustomTo(day: Int) = editExport { it.copy(customToDay = day) }
+    fun setExportInclude(value: String) = editExport { it.copy(includeField = value) }
+    fun setExportExclude(value: String) = editExport { it.copy(excludeField = value) }
+    fun setExportIncludeAll(value: Boolean) = editExport { it.copy(includeAll = value) }
+    fun setExportContent(value: String) = editExport { it.copy(content = value) }
+    fun setExportFormat(value: String) = editExport { it.copy(format = value) }
+    fun setExportGrouping(value: String) = editExport { it.copy(grouping = value) }
+    fun setExportDestination(value: String) = editExport { it.copy(destination = value) }
+
+    fun setExportWindowEnabled(on: Boolean) = editExport { query ->
+        query.copy(timeWindow = if (on) query.timeWindow ?: DEFAULT_WINDOW else null)
+    }
+
+    fun setExportWindowStart(minute: Int) = editExport { query ->
+        query.copy(timeWindow = (query.timeWindow ?: DEFAULT_WINDOW).copy(startMinute = minute))
+    }
+
+    fun setExportWindowEnd(minute: Int) = editExport { query ->
+        query.copy(timeWindow = (query.timeWindow ?: DEFAULT_WINDOW).copy(endMinute = minute))
+    }
+
+    /** Back to the shipped defaults, on disk and on screen. */
+    fun resetExport() {
+        viewModelScope.launch { settings.resetExport() }
+        _exportQuery.value = ExportQuery()
+        recountExport()
+    }
+
+    private fun editExport(change: (ExportQuery) -> ExportQuery) {
+        _exportQuery.update(change)
+        recountExport()
+    }
+
+    private var counting: Job? = null
+
+    /**
+     * Recounts after a pause in typing rather than on every keystroke: the count is a scan over
+     * the range, and running it per character on a day with thousands of lines is how a text
+     * field starts dropping input.
+     */
+    private fun recountExport() {
+        counting?.cancel()
+        _exportPreview.value = null
+        counting = viewModelScope.launch(Dispatchers.IO) {
+            delay(COUNT_DEBOUNCE_MS)
+            val query = _exportQuery.value
+            _exportPreview.value = runCatching { Exporter.preview(query) }.getOrNull()
+        }
+    }
+
+    /** Writes the export and remembers the settings as the next export's defaults. */
+    fun runExport(onDone: () -> Unit) = viewModelScope.launch(Dispatchers.IO) {
+        val query = _exportQuery.value
+        val title = exportTitle(query)
+        _status.value = Exporter.export(getApplication(), title, query, query.destination)
             .fold(onSuccess = { it }, onFailure = { "Export failed: ${it.message}" })
+        settings.saveExport(
+            range = query.range,
+            customFromDay = query.customFromDay,
+            customToDay = query.customToDay,
+            windowStart = query.timeWindow?.startMinute ?: -1,
+            windowEnd = query.timeWindow?.endMinute ?: -1,
+            include = query.includeField,
+            exclude = query.excludeField,
+            includeAll = query.includeAll,
+            content = query.content,
+            format = query.format,
+            grouping = query.grouping,
+            destination = query.destination,
+        )
+        withContext(Dispatchers.Main) {
+            AppUiState.showExport.value = false
+            onDone()
+        }
+    }
+
+    private fun exportTitle(query: ExportQuery): String = when {
+        query.isSelection -> "Recorder — ${query.onlyIds.size} selected lines"
+        query.range == ExportRange.CUSTOM -> "Recorder — ${query.customFromDay} to ${query.customToDay}"
+        else -> "Recorder — ${ExportRange.label(query.range).lowercase()}"
     }
 
     // --- Two versions side by side ---
@@ -440,8 +573,6 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     val endOfDayEnabled = settings.endOfDayEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     fun setEndOfDayEnabled(on: Boolean) = viewModelScope.launch { settings.setEndOfDayEnabled(on) }
-    fun setExportDefaults(content: String, format: String) =
-        viewModelScope.launch { settings.setExportDefaults(content, format) }
 
     /** The one model, and whether it can be loaded right now. */
     fun modelStatus(): String {
@@ -741,6 +872,12 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         /** One query per pause in typing, not one per keystroke. */
         const val SEARCH_DEBOUNCE_MS = 250L
         const val SEARCH_LIMIT = 80
+
+        /** One recount per pause in typing, not one per keystroke. */
+        const val COUNT_DEBOUNCE_MS = 250L
+
+        /** The evening, as a starting point when the window is switched on. */
+        private val DEFAULT_WINDOW = TimeWindow(startMinute = 18 * 60, endMinute = 23 * 60 + 59)
     }
 
     /**

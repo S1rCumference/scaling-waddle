@@ -68,7 +68,6 @@ private fun GroupList(viewModel: RecorderViewModel) {
     val openDay by viewModel.openDay.collectAsState()
     val openDayHours by viewModel.openDayHours.collectAsState()
     var openMonth by remember { mutableStateOf<Int?>(null) }
-    var exporting by remember { mutableStateOf(false) }
     var searching by remember { mutableStateOf(false) }
     val query by viewModel.logQuery.collectAsState()
     val matches by viewModel.logMatches.collectAsState()
@@ -87,7 +86,7 @@ private fun GroupList(viewModel: RecorderViewModel) {
             } else {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     TextButton(onClick = { searching = true }) { Text("Search") }
-                    TextButton(onClick = { exporting = true }) { Text("Export") }
+                    TextButton(onClick = { viewModel.openExport() }) { Text("Export") }
                 }
             }
         }
@@ -177,9 +176,6 @@ private fun GroupList(viewModel: RecorderViewModel) {
         }
     }
 
-    if (exporting) {
-        RangeExportDialog(viewModel, days.map { it.dayKey }) { exporting = false }
-    }
 }
 
 /** The search box: one line, with a way back out of it. */
@@ -321,13 +317,12 @@ private fun GroupRow(
 @Composable
 private fun GroupDetail(viewModel: RecorderViewModel, group: GroupRef) {
     val compact = LocalCompact.current
-    var exporting by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().padding(horizontal = if (compact) 0.dp else 12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             TextButton(onClick = { viewModel.openGroup(null) }) { Text("‹ All logs") }
             Row {
-                TextButton(onClick = { exporting = true }) { Text("Export") }
+                TextButton(onClick = { viewModel.openExport(group) }) { Text("Export") }
                 TextButton(onClick = { viewModel.recorrect(group) }) { Text("Correct this group") }
             }
         }
@@ -340,9 +335,6 @@ private fun GroupDetail(viewModel: RecorderViewModel, group: GroupRef) {
         Lines(viewModel, Modifier.weight(1f))
     }
 
-    if (exporting) {
-        GroupExportDialog(viewModel, group) { exporting = false }
-    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -361,7 +353,11 @@ private fun Lines(viewModel: RecorderViewModel, modifier: Modifier) {
                 FilterChip(selected = mode == entry, onClick = { viewModel.setTextMode(entry) }, label = { Text(entry.label) })
             }
             if (selection.isNotEmpty()) {
-                TextButton(onClick = viewModel::clearSelection) { Text("${selection.size} selected · clear") }
+                // A long-press selection opens the same Export screen, pre-filled with it.
+                TextButton(onClick = { viewModel.openExport(onlyIds = selection) }) {
+                    Text("Export ${selection.size}")
+                }
+                TextButton(onClick = viewModel::clearSelection) { Text("Clear") }
             }
         }
         CorrectionSummary(lines)

@@ -10,13 +10,12 @@ import androidx.core.content.FileProvider
 import com.recorder.app.ServiceLocator
 import com.recorder.app.ui.LineView
 import com.recorder.core.storage.ExportDefaults
+import com.recorder.core.storage.ExportDestinations
 import com.recorder.core.storage.latestBySegment
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** Where an export goes. */
-enum class ExportTarget { SHARE, DOWNLOADS }
 
 /**
  * Writes exports out of the app: to the Android share sheet, or to Download/Recorder/ where
@@ -28,13 +27,13 @@ object Exporter {
     const val FOLDER = "Recorder"
 
     /** Lines for a time range, each with its newest correction. */
-    suspend fun linesFor(fromTs: Long, toTs: Long): List<LineView> = withContext(Dispatchers.IO) {
+    suspend fun rawLinesInRange(fromTs: Long, toTs: Long): List<LineView> = withContext(Dispatchers.IO) {
         val db = ServiceLocator.database
         val segments = db.transcripts().inRange(fromTs, toTs)
         attachCorrections(segments.map { it.id }).let { latest -> segments.map { LineView(it, latest[it.id]) } }
     }
 
-    suspend fun linesForIds(ids: Collection<Long>): List<LineView> = withContext(Dispatchers.IO) {
+    suspend fun rawLinesForIds(ids: Collection<Long>): List<LineView> = withContext(Dispatchers.IO) {
         val segments = ids.chunked(SQL_VARS).flatMap { ServiceLocator.database.transcripts().byIds(it) }
             .sortedBy { it.startTs }
         attachCorrections(segments.map { it.id }).let { latest -> segments.map { LineView(it, latest[it.id]) } }
@@ -46,26 +45,82 @@ object Exporter {
             .sortedWith(compareBy({ it.createdTs }, { it.id }))
             .latestBySegment()
 
+    /**
+     * Every line the query selects, with its newest correction.
+     *
+     * The range comes from the query and is done in SQL; the time-of-day window and the
+     * keywords are applied here, in memory. That is a scan, and deliberately: the FTS index
+     * matches tokens, and these filters are substring, whole-line and case-insensitive with an
+     * all-of/any-of choice and an exclusion list. Getting those right in one FTS expression is
+     * how an export quietly ships the wrong lines. FTS still earns its place narrowing an
+     * unbounded range before the scan, below.
+     */
+    suspend fun linesFor(query: ExportQuery, now: Long = System.currentTimeMillis()): List<LineView> =
+        withContext(Dispatchers.IO) {
+            val base = when {
+                query.isSelection -> rawLinesForIds(query.onlyIds)
+                else -> {
+                    val bounds = query.bounds(now)
+                    rawLinesInRange(bounds.first, bounds.last + 1)
+                }
+            }
+            base.filter { query.accepts(it.segment.startTs, primaryText(it, query.content)) }
+        }
+
+    /** The count and rough size for the live estimate, without building the file. */
+    suspend fun preview(query: ExportQuery, now: Long = System.currentTimeMillis()): Preview {
+        val lines = linesFor(query, now)
+        return Preview(lines.size, ExportFormatter.estimateBytes(lines, query))
+    }
+
+    data class Preview(val lines: Int, val bytes: Long) {
+        /** "1.2 MB", "840 bytes" — the figure beside the match count. */
+        val size: String
+            get() = when {
+                bytes < 1024 -> "$bytes bytes"
+                bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+                else -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+            }
+    }
+
     /** Renders and delivers. Returns a message for the user. */
     suspend fun export(
         context: Context,
         title: String,
-        lines: List<LineView>,
-        content: String,
-        format: String,
-        target: ExportTarget,
+        query: ExportQuery,
+        destination: String,
+        now: Long = System.currentTimeMillis(),
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            require(lines.isNotEmpty()) { "Nothing to export in that selection." }
-            val text = ExportFormatter.render(title, lines, content, format)
-            val name = ExportFormatter.fileName(title, format)
-            val mime = if (format == ExportDefaults.FORMAT_MARKDOWN) "text/markdown" else "text/plain"
-            when (target) {
-                ExportTarget.SHARE -> share(context, name, text, mime)
-                ExportTarget.DOWNLOADS -> saveToDownloads(context, name, text, mime)
+            val lines = linesFor(query, now)
+            require(lines.isNotEmpty()) { "Nothing matches those filters." }
+            val flagged = flaggedAmong(lines.map { it.segment.id })
+            val text = ExportFormatter.render(title, lines, query, flagged, now)
+            val name = ExportFormatter.fileName(lines, query)
+            val mime = ExportFormatter.mimeType(query.format)
+            when (destination) {
+                ExportDestinations.DOWNLOADS -> saveToDownloads(context, name, text, mime)
+                ExportDestinations.CLIPBOARD -> copyToClipboard(context, text, lines.size)
+                else -> share(context, name, text, mime)
             }
         }
     }
+
+    private suspend fun copyToClipboard(context: Context, text: String, lines: Int): String {
+        withContext(Dispatchers.Main) {
+            context.getSystemService(android.content.ClipboardManager::class.java)
+                ?.setPrimaryClip(android.content.ClipData.newPlainText("Recorder export", text))
+        }
+        return "Copied $lines line(s) to the clipboard"
+    }
+
+    private suspend fun flaggedAmong(ids: List<Long>): Set<Long> =
+        ids.chunked(SQL_VARS)
+            .flatMap { ServiceLocator.database.flagged().flaggedAmong(it) }
+            .toSet()
+
+    private fun primaryText(line: LineView, content: String): String =
+        if (content == ExportDefaults.CONTENT_ORIGINAL) line.original else line.corrected
 
     private suspend fun share(context: Context, name: String, text: String, mime: String): String {
         val dir = File(context.cacheDir, "exports").apply { mkdirs() }
