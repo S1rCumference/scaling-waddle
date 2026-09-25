@@ -126,39 +126,6 @@ private fun PauseBar(viewModel: RecorderViewModel) {
     }
 }
 
-/**
- * The backlog, and a way to clear it now.
- *
- * Automatic passes only run on a charger with the screen off, which is the right default
- * but means work can sit for a day. This is the other half of that bargain: it is visible
- * that something is waiting, and one tap deals with all of it.
- *
- * Absent entirely when there is nothing waiting — a permanent button for a queue that is
- * usually empty is just a line of screen gone.
- */
-@Composable
-private fun ProcessNowBar(viewModel: RecorderViewModel) {
-    val compact = LocalCompact.current
-    val pending by viewModel.pendingCorrections.collectAsState()
-    val running by viewModel.runningTasks.collectAsState()
-    if (pending <= 0 || running.isNotEmpty()) return
-
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = if (compact) 0.dp else 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            "$pending line(s) waiting for the AI",
-            color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = if (compact) 12.sp else 13.sp,
-            modifier = Modifier.weight(1f),
-        )
-        TextButton(onClick = viewModel::processNow) {
-            Text("Process now", fontSize = 13.sp)
-        }
-    }
-}
-
 /** "Pause it for, let's say, an hour." */
 private const val PAUSE_MINUTES = 60
 
@@ -169,7 +136,6 @@ fun LiveTab(viewModel: RecorderViewModel) {
 
     Column(Modifier.fillMaxSize()) {
         PauseBar(viewModel)
-        ProcessNowBar(viewModel)
         if (compact) {
             if (hours.isNotEmpty()) {
                 Text(

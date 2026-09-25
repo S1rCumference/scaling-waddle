@@ -15,7 +15,6 @@ import androidx.core.content.ContextCompat
 import com.recorder.app.BuildConfig
 import com.recorder.app.R
 import com.recorder.app.ServiceLocator
-import com.recorder.app.correction.CorrectionLoop
 import com.recorder.app.cover.CoverPresenter
 import com.recorder.app.ui.MainActivity
 import com.recorder.core.asr.AsrEngineFactory
@@ -74,9 +73,6 @@ class RecordingService : Service() {
      */
     private var coverPresenter: CoverPresenter? = null
 
-    /** Text-only correction behind recording. Never touches the audio path. */
-    private val correctionLoop = CorrectionLoop(this)
-
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -95,7 +91,6 @@ class RecordingService : Service() {
 
         Diagnostics.i(TAG, "recording service starting")
         startPipeline()
-        correctionLoop.start(scope)
 
         if (BuildConfig.COVER_UI_ENABLED) {
             coverPresenter = CoverPresenter(this).also { it.start() }
@@ -157,7 +152,6 @@ class RecordingService : Service() {
 
     override fun onDestroy() {
         coverPresenter?.stop()
-        correctionLoop.stop()
         _micSilenced.value = false
         scope.cancel()
         vad?.close()

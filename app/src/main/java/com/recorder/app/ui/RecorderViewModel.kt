@@ -437,15 +437,8 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     // --- Model and correction settings ---
 
-    val correctionEnabled = settings.correctionEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, true)
-    val correctionInterval = settings.correctionIntervalMin.stateIn(viewModelScope, SharingStarted.Eagerly, 15)
-    val correctionIntervalCharging =
-        settings.correctionIntervalChargingMin.stateIn(viewModelScope, SharingStarted.Eagerly, 3)
     val endOfDayEnabled = settings.endOfDayEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
-    fun setCorrectionEnabled(on: Boolean) = viewModelScope.launch { settings.setCorrectionEnabled(on) }
-    fun setCorrectionIntervals(battery: Int, charging: Int) =
-        viewModelScope.launch { settings.setCorrectionIntervals(battery, charging) }
     fun setEndOfDayEnabled(on: Boolean) = viewModelScope.launch { settings.setEndOfDayEnabled(on) }
     fun setExportDefaults(content: String, format: String) =
         viewModelScope.launch { settings.setExportDefaults(content, format) }
@@ -541,15 +534,6 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     fun forgetAllCorrections() = viewModelScope.launch(Dispatchers.Default) {
         db.review().forgetAll()
         _status.value = "Cleared what the AI had been taught."
-    }
-
-    /** The whole backlog, now, because the user asked rather than because a timer fired. */
-    fun processNow() = viewModelScope.launch(Dispatchers.Default) {
-        val done = CorrectionRunner.runAllPending(getApplication(), "Process now")
-        _status.value = when {
-            done > 0 -> "Corrected $done line(s)."
-            else -> CorrectionRunner.lastError ?: "Nothing was waiting."
-        }
     }
 
     /** When the current pause ends, or 0. Shown on both the inner and the cover screen. */

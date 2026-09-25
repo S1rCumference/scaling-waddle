@@ -27,8 +27,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.Alignment
+import com.recorder.app.correction.CorrectionGate
+import com.recorder.app.correction.CorrectionRunner
 import com.recorder.app.models.InstallProgress
 import com.recorder.app.service.RecordingService
+import com.recorder.core.llm.TokenBudget
+import com.recorder.core.llm.local.OnDeviceModel
 import com.recorder.core.storage.Clocks
 import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
@@ -50,7 +54,7 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
     val threshold by viewModel.vadThreshold.collectAsState()
     val taughtCount by viewModel.taughtCorrections.collectAsState()
     val pendingCount by viewModel.pendingCorrections.collectAsState()
-    val correctionOn by viewModel.correctionEnabled.collectAsState()
+    val overnightOn by viewModel.endOfDayEnabled.collectAsState()
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(if (LocalCompact.current) 4.dp else 16.dp),
@@ -95,8 +99,8 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
             "Correction",
             "correction",
             value = when {
-                !correctionOn -> "Off"
-                pendingCount > 0 -> "$pendingCount line(s) waiting"
+                !overnightOn -> "Overnight pass off"
+                pendingCount > 0 -> "$pendingCount line(s) never corrected"
                 else -> "Nothing waiting"
             },
         ) { CorrectionSection(viewModel) }
@@ -646,8 +650,9 @@ private fun CorrectionSection(viewModel: RecorderViewModel) {
             Text("Automatic passes", style = MaterialTheme.typography.titleSmall)
             Text(viewModel.schedulingStatus(), style = MaterialTheme.typography.bodySmall)
             Text(
-                "Runs on its own only while charging with the screen off, and stops when the " +
-                    "phone is hot or saving power.",
+                "Runs on its own once a night, and only while charging, with the screen off, " +
+                    "above ${CorrectionGate.MIN_BATTERY_PERCENT}% battery, and not already hot. " +
+                    "Otherwise it waits for the next night.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
@@ -659,42 +664,35 @@ private fun CorrectionSection(viewModel: RecorderViewModel) {
                 modifier = Modifier.padding(top = 4.dp),
             )
             Text(
-                if (pending > 0) "$pending line(s) waiting" else "Nothing waiting",
+                if (pending > 0) "$pending line(s) never corrected" else "Nothing waiting",
                 style = MaterialTheme.typography.bodySmall,
             )
-            if (pending > 0) {
-                TextButton(onClick = viewModel::processNow) { Text("Process now") }
-            }
         }
     }
 
-    val enabled by viewModel.correctionEnabled.collectAsState()
     val endOfDay by viewModel.endOfDayEnabled.collectAsState()
     val progress by viewModel.correctionProgress.collectAsState()
 
     Text(
-        "After a line is transcribed, the strongest model this phone can hold re-reads it with the " +
-            "lines around it and fixes misheard words. The original is always kept; corrected text " +
-            "is stored beside it and labelled with the pass and model that produced it.",
+        "${OnDeviceModel.LABEL} re-reads a transcript line with the lines around it and fixes " +
+            "misheard words. The original is always kept; corrected text is stored beside it " +
+            "and labelled with the pass and the model that produced it.",
         style = MaterialTheme.typography.bodySmall,
     )
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Switch(checked = enabled, onCheckedChange = viewModel::setCorrectionEnabled)
-        Text("Let the AI correct new lines", modifier = Modifier.padding(start = 8.dp))
-    }
-    // The interval steppers are gone rather than left showing a number nothing reads.
-    // Passes are not on a timer any more; the conditions above are the schedule.
+    Text(
+        "Two things start it and nothing else does: this overnight pass, and \"Correct this " +
+            "group\" on a group in Logs. Each batch is capped at " +
+            "${CorrectionRunner.MAX_INPUT_TOKENS} tokens in and " +
+            "${TokenBudget.CORRECTION_MAX_TOKENS} out, with 45 seconds a batch and ten minutes " +
+            "for the whole pass. Anything that runs past those is abandoned rather than " +
+            "retried, and the model is unloaded the moment the pass ends.",
+        style = MaterialTheme.typography.bodySmall,
+    )
     Row(verticalAlignment = Alignment.CenterVertically) {
         Switch(checked = endOfDay, onCheckedChange = viewModel::setEndOfDayEnabled)
-        Text("End-of-day pass while charging overnight", modifier = Modifier.padding(start = 8.dp))
+        Text("Correct overnight while charging", modifier = Modifier.padding(start = 8.dp))
     }
-    Text(
-        "Re-corrects the whole day with the whole day as context — its recurring names and terms, " +
-            "and the lines around each one. Stored as the newest version.",
-        style = MaterialTheme.typography.bodySmall,
-    )
     progress?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-    Button(onClick = viewModel::processNow) { Text("Process everything waiting now") }
 }
 
 @Composable

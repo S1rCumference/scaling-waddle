@@ -161,9 +161,9 @@ object SelfReport {
                 ),
         )
         CorrectionRunner.lastError?.let { out.line("last run's problem: $it") }
-        val enabled = runCatching { settings.correctionEnabled.first() }.getOrNull()
+        val enabled = runCatching { settings.endOfDayEnabled.first() }.getOrNull()
         out.line(
-            "automatic passes enabled: " + when (enabled) {
+            "overnight pass enabled: " + when (enabled) {
                 true -> "yes"
                 false -> "no"
                 null -> "could not be read"
