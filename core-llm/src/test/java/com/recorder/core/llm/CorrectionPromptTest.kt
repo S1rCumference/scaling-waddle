@@ -95,8 +95,13 @@ class CorrectionPromptTest {
 
     @Test
     fun `an answer cannot rewrite a whole hour`() {
-        val many = (1..60).joinToString("\n") { "contacts > content$it" }
-        assertTrue(CorrectionPrompt.parse(many, source).size <= CorrectionPrompt.MAX_FIXES)
+        // Sixty distinct substitutions, every one of which would otherwise pass every guard:
+        // the words are all in the source and the replacements are all the same length.
+        val words = (1..60).map { "wordnum%02d".format(it) }
+        val wide = words.joinToString(" ")
+        val many = words.joinToString("\n") { "$it > othernum${it.takeLast(2)}" }
+        val fixes = CorrectionPrompt.parse(many, wide)
+        assertEquals(CorrectionPrompt.MAX_FIXES, fixes.size)
     }
 
     @Test
@@ -134,14 +139,23 @@ class CorrectionPromptTest {
     }
 
     @Test
-    fun `matching is case-insensitive and whole-word`() {
+    fun `matching is case-insensitive`() {
+        val targets = listOf(seg(1, "Contacts first, then the rest"))
+        val fixed = CorrectionPrompt.apply(targets, listOf(Mishearing("contacts", "content")))
+        assertEquals("content first, then the rest", fixed.single().text)
+    }
+
+    @Test
+    fun `matching is whole-word, so a longer word containing it is left alone`() {
+        // "contacted" contains "contact". Rewriting it would turn a correct word into nonsense,
+        // and this is the failure mode a naive replace would hit on every pass.
         val targets = listOf(
-            seg(1, "Contacts first, then the rest"),
-            // "contacted" contains "contact" but is a different word.
-            seg(2, "I contacted them already"),
+            seg(1, "I contacted them already"),
+            seg(2, "the contact list is wrong"),
         )
         val fixed = CorrectionPrompt.apply(targets, listOf(Mishearing("contact", "content")))
-        assertTrue("contacted must not be touched", fixed.none { it.segmentId == 2L })
+        assertEquals(listOf(2L), fixed.map { it.segmentId })
+        assertEquals("the content list is wrong", fixed.single().text)
     }
 
     @Test
