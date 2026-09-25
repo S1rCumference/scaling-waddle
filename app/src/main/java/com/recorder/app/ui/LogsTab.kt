@@ -87,7 +87,6 @@ private fun GroupList(viewModel: RecorderViewModel) {
             } else {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     TextButton(onClick = { searching = true }) { Text("Search") }
-                    TextButton(onClick = { viewModel.openGroup(GroupRef.ALL) }) { Text("Ask everything") }
                     TextButton(onClick = { exporting = true }) { Text("Export") }
                 }
             }
@@ -322,21 +321,14 @@ private fun GroupRow(
 @Composable
 private fun GroupDetail(viewModel: RecorderViewModel, group: GroupRef) {
     val compact = LocalCompact.current
-    val askOpen by AppUiState.askOpen.collectAsState()
     var exporting by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().padding(horizontal = if (compact) 0.dp else 12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             TextButton(onClick = { viewModel.openGroup(null) }) { Text("‹ All logs") }
             Row {
-                if (group.kind != GroupKind.ALL) {
-                    TextButton(onClick = { exporting = true }) { Text("Export") }
-                }
-                if (compact && group.kind != GroupKind.ALL) {
-                    TextButton(onClick = { AppUiState.askOpen.value = !askOpen }) {
-                        Text(if (askOpen) "Lines" else "Ask")
-                    }
-                }
+                TextButton(onClick = { exporting = true }) { Text("Export") }
+                TextButton(onClick = { viewModel.recorrect(group) }) { Text("Correct this group") }
             }
         }
         Text(
@@ -345,16 +337,7 @@ private fun GroupDetail(viewModel: RecorderViewModel, group: GroupRef) {
             color = if (compact) Color.White else MaterialTheme.colorScheme.onBackground,
         )
 
-        when {
-            // "Everything" is too big to list; it is a place to ask.
-            group.kind == GroupKind.ALL -> AskPanel(viewModel, group, Modifier.weight(1f))
-            compact -> if (askOpen) AskPanel(viewModel, group, Modifier.weight(1f)) else Lines(viewModel, Modifier.weight(1f))
-            else -> {
-                Lines(viewModel, Modifier.weight(0.58f))
-                HorizontalDivider()
-                AskPanel(viewModel, group, Modifier.weight(0.42f))
-            }
-        }
+        Lines(viewModel, Modifier.weight(1f))
     }
 
     if (exporting) {
@@ -381,17 +364,6 @@ private fun Lines(viewModel: RecorderViewModel, modifier: Modifier) {
                 TextButton(onClick = viewModel::clearSelection) { Text("${selection.size} selected · clear") }
             }
         }
-        // The summary is its own view of the group, not a filter over the lines, so it comes
-        // before the transcript rendering rather than inside it.
-        if (mode == TextMode.SUMMARY) {
-            group?.let { open ->
-                Column(Modifier.verticalScroll(rememberScrollState()).weight(1f)) {
-                    SummaryList(viewModel, open)
-                }
-            }
-            return@Column
-        }
-
         CorrectionSummary(lines)
 
         if (lines.isEmpty()) {
@@ -440,7 +412,6 @@ private fun LineText(line: LineView, mode: TextMode, sideBySide: Boolean) {
         // Summary never reaches here — it is a different view of the group, handled before
         // the lines are rendered at all — but it is spelled out rather than swept into an
         // else, so the next mode added has to come back and decide.
-        TextMode.SUMMARY,
         TextMode.CORRECTED,
         -> Text(line.corrected, color = main, fontSize = 16.sp)
         TextMode.BOTH -> if (sideBySide) {
@@ -484,105 +455,4 @@ private fun CorrectionSummary(lines: List<LineView>) {
         fontSize = 12.sp,
         modifier = Modifier.padding(vertical = 2.dp),
     )
-}
-
-// ---------------------------------------------------------------- ask, scoped to the group
-
-@Composable
-fun AskPanel(viewModel: RecorderViewModel, group: GroupRef, modifier: Modifier) {
-    val compact = LocalCompact.current
-    val conversations by viewModel.conversations.collectAsState()
-    val turns = conversations[group.id].orEmpty()
-    val drafts by AppUiState.drafts.collectAsState()
-    val input = drafts[group.id].orEmpty()
-    val state = rememberSharedListState("ask:${group.id}")
-    val busy = turns.lastOrNull()?.pending == true
-
-    androidx.compose.runtime.LaunchedEffect(turns.size) {
-        if (turns.isNotEmpty()) state.animateScrollToItem(turns.lastIndex)
-    }
-
-    Column(modifier.fillMaxWidth()) {
-        LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = state) {
-            if (turns.isEmpty()) {
-                item {
-                    Text(
-                        if (group.kind == GroupKind.ALL) "Ask anything about everything recorded." else
-                            "Ask about just this group, or tap an action below.",
-                        color = if (compact) CoverColors.faint else MaterialTheme.colorScheme.outline,
-                        fontSize = 14.sp,
-                        modifier = Modifier.padding(vertical = 6.dp),
-                    )
-                }
-            }
-            items(turns.size) { index -> TurnView(viewModel, turns[index]) }
-        }
-
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (group.kind != GroupKind.ALL) {
-                ActionChip("Summarise", !busy) { viewModel.summarize(group) }
-                ActionChip("Action items", !busy) { viewModel.actionItems(group) }
-                ActionChip("Draft follow-up", !busy) {
-                    viewModel.draftFollowUp(group, input)
-                    AppUiState.setDraft(group.id, "")
-                }
-                ActionChip("Re-correct", !busy) { viewModel.recorrect(group) }
-            }
-            ActionChip("Find mentions", !busy && input.isNotBlank()) {
-                viewModel.find(group, input)
-                AppUiState.setDraft(group.id, "")
-            }
-            ActionChip("What can it do?", true) { AppUiState.showCapabilities.value = true }
-            if (turns.isNotEmpty()) ActionChip("Clear", !busy) { viewModel.clearConversation(group) }
-        }
-
-        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-            androidx.compose.material3.OutlinedTextField(
-                value = input,
-                onValueChange = { AppUiState.setDraft(group.id, it) },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text(if (compact) "Ask…" else "Ask a question, or type a topic / a name") },
-                singleLine = true,
-            )
-            androidx.compose.material3.Button(
-                onClick = {
-                    viewModel.ask(group, input)
-                    AppUiState.setDraft(group.id, "")
-                },
-                enabled = !busy && input.isNotBlank(),
-                modifier = Modifier.padding(start = 6.dp),
-            ) { Text("Ask") }
-        }
-    }
-}
-
-@Composable
-private fun ActionChip(label: String, enabled: Boolean, onClick: () -> Unit) {
-    androidx.compose.material3.AssistChip(onClick = onClick, enabled = enabled, label = { Text(label) })
-}
-
-@Composable
-private fun TurnView(viewModel: RecorderViewModel, turn: ChatTurn) {
-    val compact = LocalCompact.current
-    Column(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
-        Text(
-            turn.question,
-            style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.titleSmall,
-            color = if (compact) CoverColors.live else MaterialTheme.colorScheme.primary,
-        )
-        Text(
-            if (turn.pending) "Working… (on this phone this can take a minute)" else turn.answer,
-            style = if (compact) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
-            color = if (compact) Color.White else MaterialTheme.colorScheme.onBackground,
-        )
-        if (!turn.pending && turn.answer.isNotBlank()) {
-            Row {
-                TextButton(onClick = { viewModel.copy(turn.answer) }) { Text("Copy") }
-                if (turn.isDraft) TextButton(onClick = { viewModel.shareText(turn.answer) }) { Text("Share…") }
-                if (turn.sourceIds.isNotEmpty()) {
-                    TextButton(onClick = { viewModel.flagSources(turn) }) { Text("Flag these lines") }
-                }
-            }
-        }
-    }
 }

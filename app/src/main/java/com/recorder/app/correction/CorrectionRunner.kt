@@ -45,8 +45,6 @@ object CorrectionRunner {
 
     private const val LOCAL_WINDOW = 20
     private const val LOCAL_CONTEXT = 6
-    private const val CLOUD_WINDOW = 120
-    private const val CLOUD_CONTEXT = 30
 
     /** One id, because only one correction runs at a time (they share the model slot). */
     private const val TASK = "correction"
@@ -88,13 +86,12 @@ object CorrectionRunner {
         if (segments.isEmpty()) return@withLock 0
         val corrected = runWindows(segments, CorrectionPass.END_OF_DAY, "Overnight pass on ${label(dayKey)}")
         if (corrected > 0) {
-            val chosen = ServiceLocator.providers.correctionProvider()
             db.dayPasses().upsert(
                 DayPass(
                     dayKey = dayKey,
                     coveredUntilTs = segments.last().startTs,
                     completedTs = System.currentTimeMillis(),
-                    engine = chosen.label,
+                    engine = ServiceLocator.correctionProvider.modelLabel,
                 ),
             )
         }
@@ -153,9 +150,8 @@ object CorrectionRunner {
 
     private suspend fun runWindows(segments: List<TranscriptSegment>, pass: String, what: String): Int {
         if (segments.isEmpty()) return 0
-        val cloud = ServiceLocator.providers.correctionProvider().cloud
-        val window = if (cloud) CLOUD_WINDOW else LOCAL_WINDOW
-        val contextLines = if (cloud) CLOUD_CONTEXT else LOCAL_CONTEXT
+        val window = LOCAL_WINDOW
+        val contextLines = LOCAL_CONTEXT
         val vocabulary = DayVocabulary.extract(segments.map { it.text })
 
         val windows = segments.chunked(window)
@@ -200,9 +196,9 @@ object CorrectionRunner {
         vocabulary: List<String>,
         pass: String,
     ): Int {
-        val chosen = ServiceLocator.providers.correctionProvider()
+        val provider = ServiceLocator.correctionProvider
         val startedAt = System.currentTimeMillis()
-        val result = TranscriptCorrector(chosen.provider)
+        val result = TranscriptCorrector(provider)
             .correct(CorrectionWindow(before, targets, after, vocabulary))
         val corrected = result.getOrElse { error ->
             Diagnostics.w(TAG, "correction skipped: ${error.message}")
@@ -217,7 +213,7 @@ object CorrectionRunner {
                     segmentId = it.segmentId,
                     text = it.text,
                     pass = pass,
-                    engine = chosen.label,
+                    engine = provider.modelLabel,
                     createdTs = now,
                     uncertain = it.uncertain.joinToString("\u001f"),
                 )

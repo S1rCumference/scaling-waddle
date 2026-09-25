@@ -9,8 +9,6 @@ import com.recorder.app.models.ModelHealth
 import com.recorder.app.service.RecordingService
 import com.recorder.app.ui.AppUiState
 import com.recorder.app.service.ResumeNotifier
-import com.recorder.app.work.FolderFilingWorker
-import com.recorder.app.work.HeavySyncScheduler
 import com.recorder.app.work.RecordingWatchdog
 import com.recorder.core.asr.AsrEngineFactory
 import com.recorder.core.llm.local.LocalModelRuntime
@@ -57,9 +55,7 @@ class RecorderApplication : Application() {
             Diagnostics.w("RecorderApplication", "safe mode: background work is not scheduled")
             return
         }
-        HeavySyncScheduler.ensureScheduled(this)
         RecordingWatchdog.ensureScheduled(this)
-        FolderFilingWorker.ensureScheduled(this)
         EndOfDayWorker.ensureScheduled(this)
     }
 

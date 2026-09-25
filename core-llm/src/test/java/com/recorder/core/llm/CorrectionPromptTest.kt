@@ -84,15 +84,6 @@ class CorrectionPromptTest {
         assertFalse(vocab.any { it.equals("really", ignoreCase = true) })
     }
 
-    @Test
-    fun `chunking keeps every line and picks evenly`() {
-        val lines = (1..50).map { ScopedLine(seg(it.toLong(), "x".repeat(100)), "x".repeat(100)) }
-        val chunks = lines.chunkedByChars(1_000)
-        assertEquals(50, chunks.sumOf { it.size })
-        assertTrue(chunks.all { it.charCount() <= 1_000 })
-        val picked = (1..10).toList().evenlyPick(4)
-        assertEquals(listOf(1, 4, 7, 10), picked)
-    }
 }
 
 /** The uncertainty marks the draft pass leaves for the repair pass. */
@@ -138,19 +129,19 @@ class TokenBudgetTest {
     @Test
     fun `a correction budget scales with the lines but stays bounded`() {
         assertEquals(128, TokenBudget.forLines(1).maxTokens)
-        assertEquals(864.coerceAtMost(768), TokenBudget.forLines(20).maxTokens)
-        assertEquals(768, TokenBudget.forLines(500).maxTokens)
+        // The hard output ceiling for 3.0: a batch cannot buy itself a bigger budget.
+        assertEquals(TokenBudget.CORRECTION_MAX_TOKENS, TokenBudget.forLines(20).maxTokens)
+        assertEquals(TokenBudget.CORRECTION_MAX_TOKENS, TokenBudget.forLines(500).maxTokens)
     }
 
     @Test
     fun `a repair budget is smaller than a full pass`() {
-        assertTrue(TokenBudget.forRepair(2).maxTokens < TokenBudget.forLines(20).maxTokens)
+        assertTrue(TokenBudget.forRepair(1).maxTokens < TokenBudget.forLines(20).maxTokens)
     }
 
     @Test
     fun `every budget has a deadline`() {
-        assertTrue(TokenBudget.forLines(20).deadlineMs in 1..60_000)
-        assertTrue(TokenBudget.forRepair(3).deadlineMs in 1..60_000)
-        assertTrue(TokenBudget.ANSWER.deadlineMs in 1..60_000)
+        assertEquals(TokenBudget.CORRECTION_DEADLINE_MS, TokenBudget.forLines(20).deadlineMs)
+        assertEquals(TokenBudget.CORRECTION_DEADLINE_MS, TokenBudget.forRepair(3).deadlineMs)
     }
 }

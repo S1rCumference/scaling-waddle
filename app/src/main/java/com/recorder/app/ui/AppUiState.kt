@@ -12,10 +12,9 @@ import kotlinx.coroutines.flow.update
 enum class AppTab(val label: String) { LIVE("Live"), LOGS("Logs"), FLAGS("Flags"), SETTINGS("Settings") }
 
 enum class TextMode(val label: String) {
-    /** What the AI understood, as discrete items you can mark wrong or fix. The default. */
-    SUMMARY("Summary"),
-    CORRECTED("Corrected"),
+    /** What was heard. The default: it is the only version that is certainly what was said. */
     ORIGINAL("Original"),
+    CORRECTED("Corrected"),
     BOTH("Both"),
 }
 
@@ -65,16 +64,6 @@ data class LineView(val segment: TranscriptSegment, val correction: SegmentCorre
     val changed: Boolean get() = correction != null && !correction.unchangedFrom(segment.text)
 }
 
-data class ChatTurn(
-    val question: String,
-    val answer: String,
-    val pending: Boolean = false,
-    /** Segments the answer was drawn from, so they can be flagged from here. */
-    val sourceIds: List<Long> = emptyList(),
-    /** True for drafts, which get Copy/Share rather than being sent by anything. */
-    val isDraft: Boolean = false,
-)
-
 data class ScrollPos(val index: Int, val offset: Int)
 
 /**
@@ -94,20 +83,10 @@ object AppUiState {
     /** The last tab that was not Settings — what the inner screen shows under its settings panel. */
     val contentTab = MutableStateFlow(AppTab.LIVE)
     val openGroup = MutableStateFlow<GroupRef?>(null)
-    val textMode = MutableStateFlow(TextMode.SUMMARY)
-
-    /** Ask conversations, one per group ([GroupRef.id]). */
-    val conversations = MutableStateFlow<Map<String, List<ChatTurn>>>(emptyMap())
-
-    /** Draft input text per group, so a half-typed question survives a fold. */
-    val drafts = MutableStateFlow<Map<String, String>>(emptyMap())
+    val textMode = MutableStateFlow(TextMode.ORIGINAL)
 
     /** Segments picked for a partial export, in the open group. */
     val selection = MutableStateFlow<Set<Long>>(emptySet())
-
-    /** Whether the open group is showing its Ask panel (the cover screen has room for one). */
-    val askOpen = MutableStateFlow(false)
-    val showCapabilities = MutableStateFlow(false)
 
     /** Which Settings section is expanded. */
     val settingsSection = MutableStateFlow<String?>(null)
@@ -137,7 +116,6 @@ object AppUiState {
     fun open(group: GroupRef?) {
         if (openGroup.value != group) selection.value = emptySet()
         openGroup.value = group
-        askOpen.value = false
         prefs?.edit()?.putString("group", group?.id)?.apply()
     }
 
@@ -146,21 +124,6 @@ object AppUiState {
         prefs?.edit()?.putString("mode", mode.name)?.apply()
     }
 
-    fun conversation(groupId: String): List<ChatTurn> = conversations.value[groupId].orEmpty()
-
-    fun appendTurn(groupId: String, turn: ChatTurn) =
-        conversations.update { it + (groupId to (it[groupId].orEmpty() + turn)) }
-
-    /** Replaces the last (pending) turn of a conversation with its answer. */
-    fun completeTurn(groupId: String, turn: ChatTurn) =
-        conversations.update { all ->
-            val turns = all[groupId].orEmpty()
-            all + (groupId to (if (turns.isEmpty()) listOf(turn) else turns.dropLast(1) + turn))
-        }
-
-    fun clearConversation(groupId: String) = conversations.update { it - groupId }
-
-    fun setDraft(groupId: String, text: String) = drafts.update { it + (groupId to text) }
 
     fun toggleSelected(id: Long) = selection.update { if (id in it) it - id else it + id }
 }

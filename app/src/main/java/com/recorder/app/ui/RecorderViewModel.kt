@@ -17,24 +17,17 @@ import com.recorder.app.ui.setup.SetupStatus
 import com.recorder.app.update.AvailableUpdate
 import com.recorder.app.update.UpdateChecker
 import com.recorder.app.service.RecordingService
-import com.recorder.app.work.HeavySyncScheduler
-import com.recorder.core.connectors.RefreshTokenGoogleAuth
-import com.recorder.core.llm.ProviderIds
-import com.recorder.core.llm.TranscriptAssistant
 import com.recorder.core.llm.local.DeviceCapabilities
-import com.recorder.core.llm.local.LocalModelSelector
+import com.recorder.core.llm.local.OnDeviceModel
 import com.recorder.core.llm.local.LocalModelRuntime as Runtime
 import com.recorder.core.storage.FlaggedItem
 import com.recorder.core.storage.Folder
-import com.recorder.core.storage.PendingAction
-import com.recorder.core.storage.PendingActionStatus
 import com.recorder.core.storage.TranscriptSegment
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import com.recorder.app.correction.CorrectionGate
 import com.recorder.app.correction.CorrectionRunner
-import com.recorder.app.correction.SummaryRunner
 import com.recorder.app.export.ExportTarget
 import com.recorder.app.export.Exporter
 import com.recorder.app.models.InstallProgress
@@ -44,8 +37,6 @@ import com.recorder.app.models.ModelEntry
 import com.recorder.app.models.ModelInstallStore
 import com.recorder.app.service.MicConflict
 import com.recorder.app.service.MicLevels
-import com.recorder.core.llm.GroupAssistant
-import com.recorder.core.llm.ScopedLine
 import com.recorder.core.storage.DayKey
 import com.recorder.core.storage.CorrectionRunRecord
 import com.recorder.core.storage.DaySummary
@@ -57,8 +48,6 @@ import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
 import com.recorder.core.storage.FtsQuery
 import com.recorder.core.storage.HourSummary
-import com.recorder.core.storage.ModelChoice
-import com.recorder.core.storage.SummaryItem
 import com.recorder.core.storage.UserCorrection
 import com.recorder.core.storage.RunningTasks
 import com.recorder.core.storage.latestBySegment
@@ -111,20 +100,10 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     val folders: StateFlow<List<Folder>> =
         db.folders().all().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val drafts: StateFlow<List<PendingAction>> =
-        db.pendingActions().byStatus(PendingActionStatus.DRAFT)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
     val recorderState: StateFlow<RecordingService.RecorderState> = RecordingService.state
 
     val triggerKeywords: StateFlow<Set<String>> =
         settings.triggerKeywords.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
-
-    val activeProvider: StateFlow<String> =
-        settings.activeProvider.stateIn(viewModelScope, SharingStarted.Eagerly, "")
-
-    val heavyTierEnabled: StateFlow<Boolean> =
-        settings.heavyTierEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     /** Null until read, so the UI does not flash the wizard at a configured phone. */
     val setupComplete: StateFlow<Boolean?> =
@@ -138,7 +117,6 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     val tab: StateFlow<AppTab> = AppUiState.tab
     val openGroup: StateFlow<GroupRef?> = AppUiState.openGroup
     val textMode: StateFlow<TextMode> = AppUiState.textMode
-    val conversations: StateFlow<Map<String, List<ChatTurn>>> = AppUiState.conversations
     val selection: StateFlow<Set<Long>> = AppUiState.selection
     val micSilenced: StateFlow<Boolean> = RecordingService.micSilenced
     val correctionProgress: StateFlow<String?> = CorrectionRunner.progress
@@ -310,81 +288,21 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         AppUiState.selection.value = emptySet()
     }
 
-    // --- Ask, scoped to a group ---
-
-    /** Answers a typed question about [group], or about everything for [GroupRef.ALL]. */
-    fun ask(group: GroupRef, question: String) {
-        if (question.isBlank()) return
-        runAction(group, question) { assistant, lines ->
-            if (group.kind == GroupKind.ALL) {
-                val answer = TranscriptAssistant(ServiceLocator.providers.askProvider().provider, ServiceLocator.rag)
-                    .ask(question)
-                ChatTurn(question, answer.text, sourceIds = answer.sources.map { it.id })
-            } else {
-                val answer = assistant.ask(question, lines, group.fromTs, group.toTs)
-                ChatTurn(question, answer.text, sourceIds = answer.sources.map { it.id })
-            }
-        }
-    }
-
-    fun summarize(group: GroupRef) = runAction(group, "Summarise this") { assistant, lines ->
-        val answer = assistant.summarize(lines)
-        ChatTurn("Summarise this", answer.text, sourceIds = answer.sources.map { it.id })
-    }
-
-    fun actionItems(group: GroupRef) = runAction(group, "List action items and follow-ups") { assistant, lines ->
-        val answer = assistant.actionItems(lines)
-        ChatTurn("List action items and follow-ups", answer.text, sourceIds = answer.sources.map { it.id })
-    }
-
-    fun draftFollowUp(group: GroupRef, recipient: String) {
-        val label = "Draft a follow-up" + if (recipient.isBlank()) "" else " to $recipient"
-        runAction(group, label) { assistant, lines ->
-            val answer = assistant.draftFollowUp(lines, recipient)
-            ChatTurn(label, answer.text, sourceIds = answer.sources.map { it.id }, isDraft = true)
-        }
-    }
-
-    /** No model involved: every line that mentions the topic. */
-    fun find(group: GroupRef, topic: String) {
-        if (topic.isBlank()) return
-        val label = "Find: $topic"
-        viewModelScope.launch {
-            AppUiState.appendTurn(group.id, ChatTurn(label, "", pending = true))
-            val hits = if (group.kind == GroupKind.ALL) {
-                ServiceLocator.rag.retrieve(topic, limit = 60).sortedBy { it.startTs }
-                    .map { ScopedLine(it, it.text) }
-            } else {
-                GroupAssistant.find(topic, scopedLines(group))
-            }
-            val text = if (hits.isEmpty()) "Nothing in here mentions \"$topic\"."
-            else "${hits.size} lines:\n" + GroupAssistant.render(hits)
-            AppUiState.completeTurn(group.id, ChatTurn(label, text, sourceIds = hits.map { it.segment.id }))
-        }
-    }
-
-    /** Re-runs the correction pass over one group, now. */
+    /**
+     * Corrects one group, now, because the user pressed the button.
+     *
+     * The only on-demand AI action left in the app. Runs off the main thread and reports
+     * through the same progress surface as the overnight pass, so it can be cancelled.
+     */
     fun recorrect(group: GroupRef) {
         if (group.kind == GroupKind.ALL) return
-        val label = "Re-run correction"
-        viewModelScope.launch(Dispatchers.Default) {
-            AppUiState.appendTurn(group.id, ChatTurn(label, "", pending = true))
+        viewModelScope.launch(Dispatchers.IO) {
             val count = runCatching { CorrectionRunner.runRange(group.fromTs, group.toTs) }.getOrDefault(0)
-            val text = when {
-                count > 0 -> "Corrected $count lines. The newest correction is shown; the original is kept."
-                else -> "Nothing was corrected. " + (CorrectionRunner.lastError?.let { "Reason: $it" }
-                    ?: "The group may be empty.")
+            _status.value = when {
+                count > 0 -> "Corrected $count line(s)."
+                else -> CorrectionRunner.lastError ?: "Nothing to correct in this group."
             }
-            AppUiState.completeTurn(group.id, ChatTurn(label, text))
         }
-    }
-
-    /** Flags the lines an answer was drawn from, labelled with the question. */
-    fun flagSources(turn: ChatTurn) = viewModelScope.launch {
-        if (turn.sourceIds.isEmpty()) return@launch
-        val keyword = "asked: " + turn.question.take(60)
-        db.flagged().insertAll(turn.sourceIds.take(20).map { FlaggedItem(segmentId = it, keyword = keyword) })
-        _status.value = "Flagged ${turn.sourceIds.take(20).size} lines"
     }
 
     fun copy(text: String) {
@@ -401,7 +319,6 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         context.startActivity(Intent.createChooser(send, "Share").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
-    fun clearConversation(group: GroupRef) = AppUiState.clearConversation(group.id)
 
     // --- Diagnostics: what went wrong, readable from the phone alone ---
 
@@ -485,36 +402,6 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     suspend fun segmentsByIds(ids: List<Long>): Map<Long, TranscriptSegment> =
         ids.distinct().chunked(900).flatMap { db.transcripts().byIds(it) }.associateBy { it.id }
 
-    private fun runAction(
-        group: GroupRef,
-        label: String,
-        block: suspend (GroupAssistant, List<ScopedLine>) -> ChatTurn,
-    ) {
-        // Off the main thread by policy, not by luck. viewModelScope is
-        // Dispatchers.Main.immediate, so without this the prompt building, the answer
-        // parsing and the flow collection all run where the UI is drawn.
-        viewModelScope.launch(Dispatchers.Default) {
-            AppUiState.appendTurn(group.id, ChatTurn(label, "", pending = true))
-            val turn = runCatching {
-                val chosen = ServiceLocator.providers.askProvider()
-                val assistant = if (chosen.cloud) {
-                    GroupAssistant(chosen.provider, db.transcripts(), GroupAssistant.CLOUD_CHUNK_CHARS, GroupAssistant.CLOUD_MAX_CHUNKS)
-                } else {
-                    GroupAssistant(chosen.provider, db.transcripts())
-                }
-                block(assistant, if (group.kind == GroupKind.ALL) emptyList() else scopedLines(group))
-            }.getOrElse { error ->
-                if (error is kotlinx.coroutines.CancellationException) throw error
-                ChatTurn(label, "Something went wrong: ${error.message}")
-            }
-            AppUiState.completeTurn(group.id, turn)
-        }
-    }
-
-    /** The group's lines as the assistant should read them: corrected where available. */
-    private suspend fun scopedLines(group: GroupRef): List<ScopedLine> =
-        Exporter.linesFor(group.fromTs, group.toTs).map { ScopedLine(it.segment, it.corrected) }
-
     // --- Export ---
 
     val exportContent: StateFlow<String> =
@@ -555,26 +442,21 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     val correctionIntervalCharging =
         settings.correctionIntervalChargingMin.stateIn(viewModelScope, SharingStarted.Eagerly, 3)
     val endOfDayEnabled = settings.endOfDayEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, true)
-    val correctionEngine = settings.correctionEngine.stateIn(viewModelScope, SharingStarted.Eagerly, ModelChoice.LOCAL)
-    val correctionModel = settings.correctionModel.stateIn(viewModelScope, SharingStarted.Eagerly, ModelChoice.AUTO)
-    val askModel = settings.askModel.stateIn(viewModelScope, SharingStarted.Eagerly, ModelChoice.AUTO)
 
     fun setCorrectionEnabled(on: Boolean) = viewModelScope.launch { settings.setCorrectionEnabled(on) }
     fun setCorrectionIntervals(battery: Int, charging: Int) =
         viewModelScope.launch { settings.setCorrectionIntervals(battery, charging) }
     fun setEndOfDayEnabled(on: Boolean) = viewModelScope.launch { settings.setEndOfDayEnabled(on) }
-    fun setCorrectionEngine(engine: String) = viewModelScope.launch { settings.setCorrectionEngine(engine) }
-    fun setCorrectionModel(choice: String) = viewModelScope.launch { settings.setCorrectionModel(choice) }
-    fun setAskModel(choice: String) = viewModelScope.launch { settings.setAskModel(choice) }
     fun setExportDefaults(content: String, format: String) =
         viewModelScope.launch { settings.setExportDefaults(content, format) }
 
-    /** Installed local models, strongest first, as (file name, label) for the switchers. */
-    fun installedModels(): List<Pair<String, String>> =
-        LocalModelSelector(getApplication()).allCandidates().filter { it.exists }.map { it.fileName to it.label }
-
-    /** The tier this phone is on and what each role would use right now, in words. */
-    fun modelSummary(): String = LocalModelSelector(getApplication()).tierSummary()
+    /** The one model, and whether it can be loaded right now. */
+    fun modelStatus(): String {
+        val context = getApplication<Application>()
+        return OnDeviceModel.problem(context)
+            ?.let { "${OnDeviceModel.LABEL} — $it" }
+            ?: "${OnDeviceModel.LABEL} — ready"
+    }
 
     /** Per-model download state, so Settings shows the same truth as the wizard. */
     val modelStates: StateFlow<Map<String, InstallProgress>> = ModelInstallStore.states
@@ -648,48 +530,9 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     // --- The reviewable summary ------------------------------------------------------------
 
-    /** The items for the open group, if it has been summarised. */
-    @OptIn(ExperimentalCoroutinesApi::class)
-    val summaryItems: StateFlow<List<SummaryItem>> = AppUiState.openGroup
-        .flatMapLatest { group ->
-            if (group == null || group.kind == GroupKind.ALL) {
-                flowOf(emptyList())
-            } else {
-                db.review().itemsIn(group.fromTs, group.toTs)
-            }
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
     /** Everything the user has taught it, newest first, for Settings. */
     val taughtCorrections: StateFlow<List<UserCorrection>> = db.review().corrections()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    /** Builds or rebuilds the items for a group. */
-    fun summarise(group: GroupRef) = viewModelScope.launch(Dispatchers.Default) {
-        _status.value = "Reading it back…"
-        val count = SummaryRunner.summarise(group.fromTs, group.toTs)
-        _status.value = if (count > 0) "$count item(s)" else
-            SummaryRunner.lastError ?: "Nothing to summarise yet."
-    }
-
-    /**
-     * Marks an item wrong. The item stays: it is the evidence a later pass is told about.
-     */
-    fun flagItem(item: SummaryItem) = viewModelScope.launch(Dispatchers.Default) {
-        val wrong = !item.flaggedWrong
-        db.review().flag(item.id, wrong)
-        if (wrong) SummaryRunner.remember(item.display, corrected = "")
-        _status.value = if (wrong) "Marked wrong. The AI will be told." else "Unmarked."
-    }
-
-    /** Replaces an item's text with the user's own, and remembers the substitution. */
-    fun editItem(item: SummaryItem, text: String) = viewModelScope.launch(Dispatchers.Default) {
-        val cleaned = text.trim()
-        db.review().edit(item.id, cleaned.takeIf { it.isNotBlank() })
-        if (cleaned.isNotBlank() && cleaned != item.text) {
-            SummaryRunner.remember(item.text, corrected = cleaned)
-        }
-    }
 
     fun forgetCorrection(id: Long) = viewModelScope.launch(Dispatchers.Default) {
         db.review().forget(id)
@@ -727,42 +570,6 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     fun saveTriggers(keywords: Set<String>) = viewModelScope.launch {
         settings.setTriggerKeywords(keywords)
-    }
-
-    fun saveProvider(id: String, endpoint: String, model: String, apiKey: String) =
-        viewModelScope.launch {
-            settings.setProvider(id, endpoint, model)
-            if (apiKey.isNotBlank()) ServiceLocator.apiKeys.setKey(id, apiKey)
-            _status.value = "Saved ${ProviderIds.label(id)}"
-        }
-
-    fun setHeavyTierEnabled(enabled: Boolean) = viewModelScope.launch {
-        settings.setHeavyTierEnabled(enabled)
-    }
-
-    fun saveGoogleCredentials(clientId: String, clientSecret: String, refreshToken: String) {
-        val keys = ServiceLocator.apiKeys
-        if (clientId.isNotBlank()) keys.setKey(RefreshTokenGoogleAuth.KEY_CLIENT_ID, clientId)
-        if (clientSecret.isNotBlank()) keys.setKey(RefreshTokenGoogleAuth.KEY_CLIENT_SECRET, clientSecret)
-        if (refreshToken.isNotBlank()) keys.setKey(RefreshTokenGoogleAuth.KEY_REFRESH_TOKEN, refreshToken)
-        _status.value = "Google credentials stored"
-    }
-
-    fun syncNow() {
-        HeavySyncScheduler.runNow(getApplication())
-        _status.value = "Heavy sync queued"
-    }
-
-    fun approveDraft(id: Long) = viewModelScope.launch {
-        val result = ServiceLocator.connectorGateway.approve(id)
-        _status.value = result.fold(
-            onSuccess = { "Sent: $it" },
-            onFailure = { "Failed: ${it.message}" },
-        )
-    }
-
-    fun rejectDraft(id: Long) = viewModelScope.launch {
-        ServiceLocator.connectorGateway.reject(id)
     }
 
     private val deviceOwner by lazy { DeviceOwner(getApplication<Application>()) }
@@ -846,43 +653,24 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         _benchmarkRunning.value = true
         _benchmark.value = "Loading the model and measuring. This takes a minute."
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
-            val selector = LocalModelSelector(context)
-            val spec = selector.selectSmallModel() ?: selector.selectHeavyModel()
-
-            // "Not installed" used to be claimed whenever the selector declined, including
-            // when the file was present and the real reason was free memory or no charger.
-            val installedNow = selector.allCandidates().filter { it.exists }
-            _benchmark.value = when {
-                spec == null && installedNow.isEmpty() ->
-                    "No local model is downloaded yet. Settings → Models → Download."
-
-                spec == null -> buildString {
-                    append("Installed, but not loadable right now: ")
-                    append(installedNow.joinToString(", ") { it.label })
-                    append(".\n\n")
-                    append(selector.heavyUnavailableReason() ?: "")
-                    append("\nFree memory: ")
-                    append(DeviceCapabilities.availableRamMb(context))
-                    append(" MB. The charging-only model needs a charger; the all-day model ")
-                    append("needs enough free memory beside the recorder.")
-                }
-                else -> {
-                    val model = Runtime.load(context, spec)
-                    when (model) {
-                        null -> "Could not load ${spec.fileName}."
-                        else -> {
-                            val report = model.benchmark()
-                            Runtime.unload()
-                            buildString {
-                                append("Model: ").append(spec.label).append('\n')
-                                append("RAM tier: ").append(DeviceCapabilities.ramTier(context))
-                                append(" (").append(DeviceCapabilities.marketedRamGb(context))
-                                append(" GB)\n\n")
-                                append(report ?: "This backend does not expose a benchmark.")
-                            }
-                        }
+            val spec = OnDeviceModel.selected(context)
+            _benchmark.value = if (spec == null) {
+                "Cannot measure: ${OnDeviceModel.problem(context)}"
+            } else {
+                val model = Runtime.load(context, spec)
+                if (model == null) {
+                    "Could not load ${spec.fileName}. Settings -> Diagnostics has the detail."
+                } else {
+                    val report = model.benchmark()
+                    Runtime.unload()
+                    buildString {
+                        append("Model: ").append(spec.label).append('\n')
+                        append("RAM: ").append("%.1f".format(DeviceCapabilities.totalRamGb(context)))
+                        append(" GB measured, ").append(DeviceCapabilities.availableRamMb(context))
+                        append(" MB free now\n\n")
+                        append(report ?: "This backend does not expose a benchmark.")
                     }
                 }
             }
@@ -971,24 +759,16 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         const val SEARCH_LIMIT = 80
     }
 
-    suspend fun providerSettings(): Triple<String, String, String> = Triple(
-        settings.activeProvider.first(),
-        settings.providerEndpoint.first(),
-        settings.providerModel.first(),
-    )
-
     /**
      * Reported in Settings so what actually shipped on this phone is visible without a
      * computer: which native runtimes are in the APK, whether their model files arrived,
-     * and why a local heavy model is or isn't offered.
+     * and whether the one model it runs can be loaded.
      */
     fun deviceSummary(): String {
         val context = getApplication<Application>()
-        val selector = LocalModelSelector(context)
-        val tier = DeviceCapabilities.ramTier(context)
         val ram = "%.1f".format(DeviceCapabilities.totalRamGb(context))
-        val heavy = selector.heavyUnavailableReason()
-            ?: "available (${selector.heavyModelCandidate()?.label})"
+        val model = OnDeviceModel.problem(context)?.let { "${OnDeviceModel.LABEL}: $it" }
+            ?: "${OnDeviceModel.LABEL}: ready"
 
         val asr = when {
             !AsrEngineFactory.sherpaBundled -> "not bundled in this build"
@@ -1009,12 +789,12 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         return """
             Device: ${Build.MANUFACTURER} ${Build.MODEL}
             Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})
-            RAM ${ram} GB · tier $tier
+            RAM ${ram} GB
             App ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})
 
             Speech recognition: $asr
             Local AI runtime: $llm
-            Local heavy model: $heavy
+            Correction model: $model
             Native libraries: $backends
 
             Displays (read this open, then closed, to learn this phone's cover display):

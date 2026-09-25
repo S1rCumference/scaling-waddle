@@ -177,7 +177,6 @@ dependencies {
     implementation(project(":core-asr"))
     implementation(project(":core-storage"))
     implementation(project(":core-llm"))
-    implementation(project(":core-connectors"))
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")

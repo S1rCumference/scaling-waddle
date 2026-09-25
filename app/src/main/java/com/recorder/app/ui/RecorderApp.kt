@@ -183,7 +183,7 @@ private fun CompactShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) {
         }
         BusyBar(viewModel)
         Box(Modifier.weight(1f)) { TabContent(viewModel, tab, onRunSetup) }
-        CompactTabs(tab, viewModel.flagged.collectAsState().value.size, viewModel.drafts.collectAsState().value.size) {
+        CompactTabs(tab, viewModel.flagged.collectAsState().value.size) {
             viewModel.selectTab(it)
         }
     }
@@ -231,11 +231,11 @@ private fun CoverStatusBar(viewModel: RecorderViewModel) {
 }
 
 @Composable
-private fun CompactTabs(current: AppTab, flagCount: Int, draftCount: Int, onSelect: (AppTab) -> Unit) {
+private fun CompactTabs(current: AppTab, flagCount: Int, onSelect: (AppTab) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
         AppTab.entries.forEach { entry ->
             val label = when (entry) {
-                AppTab.FLAGS -> if (draftCount > 0) "Flags ($draftCount)" else "Flags"
+                AppTab.FLAGS -> if (flagCount > 0) "Flags ($flagCount)" else "Flags"
                 AppTab.SETTINGS -> "More"
                 else -> entry.label
             }

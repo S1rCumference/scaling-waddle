@@ -28,36 +28,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.Alignment
 import com.recorder.app.models.InstallProgress
-import com.recorder.app.correction.SummaryRunner
 import com.recorder.app.service.RecordingService
 import com.recorder.core.storage.Clocks
 import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
-import com.recorder.core.storage.ModelChoice
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
-import com.recorder.core.llm.ProviderIds
 
 @Composable
 fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
     val triggers by viewModel.triggerKeywords.collectAsState()
-    val activeProvider by viewModel.activeProvider.collectAsState()
-    val heavyEnabled by viewModel.heavyTierEnabled.collectAsState()
 
     var triggerText by remember(triggers) { mutableStateOf(triggers.joinToString(", ")) }
-    var selectedProvider by remember(activeProvider) {
-        mutableStateOf(activeProvider.ifBlank { ProviderIds.CLAUDE })
-    }
-    var endpoint by remember { mutableStateOf("") }
-    var model by remember { mutableStateOf("") }
-    var apiKey by remember { mutableStateOf("") }
-
-    var googleClientId by remember { mutableStateOf("") }
-    var googleClientSecret by remember { mutableStateOf("") }
-    var googleRefreshToken by remember { mutableStateOf("") }
 
     val use24Hour by viewModel.use24HourClock.collectAsState()
     // Collected here so each row can show its current value without being opened, which is
@@ -66,13 +51,6 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
     val taughtCount by viewModel.taughtCorrections.collectAsState()
     val pendingCount by viewModel.pendingCorrections.collectAsState()
     val correctionOn by viewModel.correctionEnabled.collectAsState()
-
-    LaunchedEffect(Unit) {
-        val (id, savedEndpoint, savedModel) = viewModel.providerSettings()
-        if (id.isNotBlank()) selectedProvider = id
-        endpoint = savedEndpoint.ifBlank { ProviderIds.defaultEndpoint(selectedProvider) }
-        model = savedModel.ifBlank { ProviderIds.defaultModel(selectedProvider) }
-    }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(if (LocalCompact.current) 4.dp else 16.dp),
@@ -127,115 +105,9 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
             "taught",
             value = if (taughtCount.isEmpty()) "Nothing yet" else "${taughtCount.size} correction(s)",
         ) { TaughtSection(viewModel) }
-        Section("Cloud AI (optional)", "cloud", value = if (heavyEnabled) "On" else "Off") {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(
-                    checked = heavyEnabled,
-                    onCheckedChange = { enabled -> viewModel.setHeavyTierEnabled(enabled) },
-                )
-                Text(
-                    "Allow sending transcript text to this provider (never audio)",
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(start = 8.dp),
-                )
-            }
-            Text(
-                "Audio never leaves the device either way. Only text is sent, and only when this is on.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-
-            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                ProviderIds.all.forEach { id ->
-                    FilterChip(
-                        selected = selectedProvider == id,
-                        onClick = {
-                            selectedProvider = id
-                            endpoint = ProviderIds.defaultEndpoint(id)
-                            model = ProviderIds.defaultModel(id)
-                        },
-                        label = { Text(ProviderIds.label(id)) },
-                        modifier = Modifier.padding(end = 6.dp),
-                    )
-                }
-            }
-
-            OutlinedTextField(
-                value = endpoint,
-                onValueChange = { endpoint = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Endpoint") },
-                singleLine = true,
-            )
-            OutlinedTextField(
-                value = model,
-                onValueChange = { model = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Model") },
-                singleLine = true,
-            )
-            OutlinedTextField(
-                value = apiKey,
-                onValueChange = { apiKey = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("API key (stored encrypted; leave blank to keep existing)") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-            )
-            Row {
-                Button(
-                    onClick = {
-                        viewModel.saveProvider(selectedProvider, endpoint, model, apiKey)
-                        apiKey = ""
-                    },
-                ) { Text("Save provider") }
-                TextButton(onClick = viewModel::syncNow) { Text("Sync now") }
-            }
-        }
-        Section("What the AI can do", "ai") { CapabilitiesList() }
         }
         Group("Data") {
         Section("Export defaults", "export") { ExportDefaultsSection(viewModel) }
-        Section("Connectors", "connectors") {
-            Text(
-                "Gmail, Calendar and Drive. Outbound actions are always queued as drafts for " +
-                    "your approval. Run scripts/google_oauth.sh on a computer to get a refresh token.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            OutlinedTextField(
-                value = googleClientId,
-                onValueChange = { googleClientId = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Google client id") },
-                singleLine = true,
-            )
-            OutlinedTextField(
-                value = googleClientSecret,
-                onValueChange = { googleClientSecret = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Google client secret") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-            )
-            OutlinedTextField(
-                value = googleRefreshToken,
-                onValueChange = { googleRefreshToken = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Google refresh token") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-            )
-            Button(
-                onClick = {
-                    viewModel.saveGoogleCredentials(
-                        googleClientId,
-                        googleClientSecret,
-                        googleRefreshToken,
-                    )
-                    googleClientSecret = ""
-                    googleRefreshToken = ""
-                },
-            ) { Text("Save Google credentials") }
-        }
         Section("Diagnostics", "diagnostics") { DiagnosticsSection(viewModel) }
         Section("Self-diagnostic report", "report") { SelfReportSection(viewModel) }
         }
@@ -565,14 +437,14 @@ private fun TaughtSection(viewModel: RecorderViewModel) {
     val taught by viewModel.taughtCorrections.collectAsState()
 
     Text(
-        "When you mark a summary item wrong or fix its wording, the change is kept here and " +
-            "put in front of the model next time. The newest ${SummaryRunner.TAUGHT_IN_PROMPT} " +
-            "go into each prompt; the newest ${SummaryRunner.TAUGHT_KEPT} are kept at all.",
+        "Substitutions you made by hand, kept as a plain list. Nothing adds to this list in " +
+            "3.0 — the summary screen that fed it is gone — so what is here is what was " +
+            "taught before, and it can be read and cleared but not added to.",
         style = MaterialTheme.typography.bodySmall,
     )
     if (taught.isEmpty()) {
         Text(
-            "Nothing yet. Mark something wrong in a summary and it will appear here.",
+            "Nothing was ever taught.",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(top = 8.dp),
         )
@@ -667,79 +539,23 @@ private fun Section(
 
 @Composable
 private fun ModelsSection(viewModel: RecorderViewModel, onRunSetup: () -> Unit) {
-    val correctionModel by viewModel.correctionModel.collectAsState()
-    val correctionEngine by viewModel.correctionEngine.collectAsState()
-    val askModel by viewModel.askModel.collectAsState()
-    val heavyEnabled by viewModel.heavyTierEnabled.collectAsState()
     val downloadStates by viewModel.modelStates.collectAsState()
     val catalogue = remember { viewModel.catalogue() }
-    val installed = remember { viewModel.installedModels() }
 
     Text(
-        "Three tiers, and nothing that needs more than a 12 GB phone.",
+        "3.0 runs one language model and one speech model. There is no tier to pick and no " +
+            "per-task choice to make: the language model corrects transcript lines, and that " +
+            "is the only thing it is ever asked to do.",
         style = MaterialTheme.typography.bodySmall,
     )
     Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Text(
-            viewModel.modelSummary(),
+            viewModel.modelStatus(),
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(12.dp),
         )
     }
-    Text(
-        "LOW (6–8 GB) uses Gemma 3 1B all day. MEDIUM (12 GB) uses Qwen 3 1.7B all day — " +
-            "chosen to run beside the recorder for a whole day rather than to win a benchmark. " +
-            "HIGH (12 GB) uses Qwen 3 4B and only ever runs while the phone is plugged in.",
-        style = MaterialTheme.typography.bodySmall,
-    )
-    Text(
-        "Speech recognition is Parakeet TDT, the only speech model this build supports, so " +
-            "there is nothing to switch there.",
-        style = MaterialTheme.typography.bodySmall,
-        modifier = Modifier.padding(top = 6.dp),
-    )
 
-    // --- per-role switchers -------------------------------------------------------------
-    val localOptions = installed.map { (file, label) -> label to file }
-    val cloudNote = if (heavyEnabled) "Cloud" else "Cloud (switch on Cloud AI first)"
-
-    Choice(
-        "Correction model",
-        listOf("Smallest installed (auto)" to ModelChoice.AUTO) + localOptions +
-            listOf(cloudNote to ModelChoice.CLOUD),
-        if (correctionEngine == ModelChoice.CLOUD) ModelChoice.CLOUD else correctionModel,
-    ) { choice ->
-        if (choice == ModelChoice.CLOUD) {
-            viewModel.setCorrectionEngine(ModelChoice.CLOUD)
-        } else {
-            viewModel.setCorrectionEngine(ModelChoice.LOCAL)
-            viewModel.setCorrectionModel(choice)
-        }
-    }
-    Choice(
-        "Ask model (questions, summaries, drafts)",
-        listOf("All-day model (auto)" to ModelChoice.AUTO) + localOptions +
-            listOf(cloudNote to ModelChoice.CLOUD),
-        askModel,
-    ) { viewModel.setAskModel(it) }
-    Text(
-        "Correction on \"Auto\" uses the smallest model installed: it is substituting misheard " +
-            "words using the neighbouring lines, which a 1B model does in seconds and a 4B " +
-            "model does no better in minutes. Ask on \"Auto\" uses the all-day model, or the " +
-            "charging-only model while plugged in. Cloud choices only take effect while Cloud " +
-            "AI is switched on.",
-        style = MaterialTheme.typography.bodySmall,
-    )
-
-    // --- what is actually on disk -------------------------------------------------------
-    Text(
-        "Downloads",
-        style = MaterialTheme.typography.labelLarge,
-        modifier = Modifier.padding(top = 10.dp),
-    )
-    if (catalogue.isEmpty()) {
-        Text("Could not read the model list.", style = MaterialTheme.typography.bodySmall)
-    }
     catalogue.forEach { entry ->
         val isInstalled = viewModel.isModelInstalled(entry)
         val state = downloadStates[entry.id]
@@ -764,9 +580,9 @@ private fun ModelsSection(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (!isInstalled && state !is InstallProgress.Downloading && state !is InstallProgress.Queued) {
+            if (state !is InstallProgress.Downloading && state !is InstallProgress.Queued) {
                 TextButton(onClick = { viewModel.downloadModel(entry.id) }) {
-                    Text(if (state is InstallProgress.Failed) "Retry" else "Download")
+                    Text(if (isInstalled) "Re-download" else "Download")
                 }
             }
         }

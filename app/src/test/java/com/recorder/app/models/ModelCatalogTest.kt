@@ -1,6 +1,6 @@
 package com.recorder.app.models
 
-import com.recorder.core.llm.local.LocalModelSelector
+import com.recorder.core.llm.local.OnDeviceModel
 import com.recorder.core.llm.local.RamTier
 import java.io.File
 import org.junit.Assert.assertEquals
@@ -83,23 +83,14 @@ class ModelCatalogTest {
     }
 
     /**
-     * The quiet failure this guards against: a manifest filename that the selector does not
-     * look for. The download succeeds, the file lands on disk, and the assistant stays
-     * unavailable forever with no error anywhere.
+     * The quiet failure this guards against: a manifest filename the app does not look for.
+     * The download succeeds, the file lands on disk, and the model stays unavailable forever
+     * with no error anywhere.
      */
     @Test
-    fun `chat model filenames match what the selector looks for`() {
-        val manifestSmall = shipped.filter { it.role == ModelRole.SMALL_CHAT }.map { it.fileName }
-        val manifestHeavy = shipped.filter { it.role == ModelRole.HEAVY }.map { it.fileName }
-
-        assertEquals(
-            LocalModelSelector.SMALL_MODEL_FILES.sorted(),
-            manifestSmall.sorted(),
-        )
-        assertEquals(
-            LocalModelSelector.HEAVY_MODEL_FILES.sorted(),
-            manifestHeavy.sorted(),
-        )
+    fun `the chat model filename is the one the app loads`() {
+        val chat = shipped.filter { it.role == ModelRole.SMALL_CHAT }.map { it.fileName }
+        assertEquals(listOf(OnDeviceModel.FILE_NAME), chat)
     }
 
     @Test
