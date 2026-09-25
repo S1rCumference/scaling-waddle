@@ -169,7 +169,17 @@ The phone can answer for itself, without a computer:
   it struggles; correction helps and does not fix it.
 - The speaker markers in the log are a guess from loudness and zero-crossing rate. Nobody is
   identified, no voice is enrolled, and a noisy room will produce spurious dividers.
-- Correction runs once a night. A day spent off the charger is corrected the following night.
+- Correction and summaries run once a night. A day spent off the charger is done the following
+  night — or on demand, from the group itself.
+- A summary is a 1B model's reading of a fragmentary transcript. It is told twice over not to
+  invent events, names, numbers or outcomes, and it is summarised from the level below rather
+  than from raw text at the wider spans, which is the main thing keeping it honest. It is still
+  worth reading against the lines rather than instead of them.
+- A group summarised before its lines were deleted no longer describes them, so deleting lines
+  drops the summary covering them rather than leaving a stale one. It is not rewritten until
+  something asks for it again.
+- There is no week level. The calendar rolls hours into days and days into months, which is what
+  it already grouped by; a fourth level would mean restructuring it.
 - There is no way to ask questions about your transcripts in this release. Export and read them
   somewhere else.
 - The models' licences are their own: Gemma is under Google's Gemma Terms, not a standard open

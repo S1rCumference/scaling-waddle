@@ -289,8 +289,9 @@ private fun ExpandedShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
 
     // A delete offers Undo on the same snackbar that carries the message. That is the only
     // window there is: the removed rows are held in memory and nowhere else, so the offer
-    // disappears when the snackbar does.
-    val undoable by viewModel.undoableDelete.collectAsState()
+    // disappears when the snackbar does. Read off the flow rather than collected into the
+    // composition: the message and the offer arrive together, so the snackbar effect is the
+    // only thing that needs to know.
     LaunchedEffect(status) {
         status?.let { message ->
             val undo = viewModel.undoableDelete.value != null

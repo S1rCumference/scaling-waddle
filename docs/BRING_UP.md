@@ -80,17 +80,37 @@ adb logcat -s RecordingService AsrEngineFactory SherpaAsrEnginePlugin
 
 Also check **Flagged**: "remind me" should have produced a flag.
 
-## 5. Correction and export
+**Deleting a line.** Swipe one of those live lines sideways. Expected: a red band appears behind
+it saying "Delete", then "Release to delete" once you are a third of the way across; letting go
+removes the line and offers **Undo** beside the status message. Press Undo — the line comes back
+in the same place. Then delete one and let the message time out: it is gone for good, and a
+search for its text finds nothing.
+
+In **Logs**, long-press a line to select it, tap two more, then **Delete 3**. Expected: one
+confirmation naming the count, then the three lines gone.
+
+## 5. Correction, summaries and export
 
 1. Open a group in **Logs** → **Correct**.
 
 Expected: a progress line with a Cancel button, then a count of corrected lines. Switch the
 group to **Corrected** or **Both** to see them; the original is always kept.
 
-2. **Logs → Export** → Today → Markdown → Copy to clipboard.
+2. Still in that group → **Summarise**.
+
+Expected: a progress line, then a short name above the lines with a couple of sentences under
+it. Go back to **All logs**: that hour's row now carries the name. Then open **The whole day**
+and press **Summarise** — it summarises whichever hours have no name yet, then the day from
+those names, so it takes longer the first time and is one short call after that.
+
+Read the paragraph against what you actually said. The one failure that matters is a summary
+that asserts something was decided or agreed when it was not; if you see that, it is a bug worth
+reporting with the hour's transcript, not a rough edge.
+
+3. **Logs → Export** → Today → Markdown → Copy to clipboard.
 
 Expected: a match count and size above the button, and text on the clipboard with a heading per
-day and a timestamp per line.
+day and a timestamp per line. Exporting one day should be one day of lines, not two.
 
 **Airplane mode on, then do both again.** They must still work — that is the whole point. There
 is no cloud path in 3.0 at all, so a failure that only happens with the radio off would mean
