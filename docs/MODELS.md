@@ -6,13 +6,19 @@ manifest that drives it.
 
 ## What ships in the manifest today
 
-| Model | Role | Size | Tier | Licence | Digest verified |
-|---|---|---|---|---|---|
-| Silero VAD v6.2.3 | voice activity detection | 2.2 MB | all | MIT | yes |
-| Parakeet TDT 0.6B v2 INT8 | speech recognition | 460 MB | all | CC-BY-4.0 | yes |
-| Gemma 3 1B Instruct Q4_K_M | small chat | 769 MB | 8 GB+ | Gemma Terms | no |
-| Qwen 3 1.7B Q4_K_M | small chat | 1.03 GB | 8 GB+ | Apache-2.0 | no |
-| Qwen 3 4B Q4_K_M | heavy | 2.33 GB | 12 GB+ | Apache-2.0 | no |
+| Model | Role | Size | Licence | Digest verified |
+|---|---|---|---|---|
+| Silero VAD v6.2.3 | voice activity detection | 2.2 MB | MIT | yes |
+| Parakeet TDT 0.6B v2 INT8 | speech recognition | 460 MB | CC-BY-4.0 | yes |
+| Gemma 3 1B Instruct Q4_K_M | transcript correction | 769 MB | Gemma Terms | no |
+
+Three files, about 1.2 GB in total, all of them required. 3.0 has no RAM tiers and no
+per-task model choice: Gemma corrects transcript lines and is asked to do nothing else. It
+was chosen because it has no reasoning mode and so cannot emit think tokens — the failure
+that made the previous model spend minutes and a thousand tokens on a one-line correction.
+
+A phone below `DeviceCapabilities.MIN_RAM_GB` (6 GB) still records and transcribes; it is
+simply not offered correction.
 
 Every URL and byte size above was checked against the source, not copied from a README:
 
@@ -43,41 +49,36 @@ The UI says so on the download screen rather than implying a verification that d
 To add a digest later, download the file on a machine that can reach the Hub and run
 `sha256sum`, then fill in `sha256` and set `hashVerified: true`.
 
-### Which model a phone is offered
+### Whether a phone is offered the model at all
 
-Tiering comes from `DeviceCapabilities.marketedRamGb`, which snaps the kernel's reported
-memory to the size the phone is sold as — a 12 GB phone reports 10.5 to 11.6 GiB, and a raw
-threshold used to drop it into the 8 GB tier.
+One question, not a ladder: is there at least `DeviceCapabilities.MIN_RAM_GB` (6 GB) of
+memory, and is there enough free right now for `OnDeviceModel.REQUIRED_FREE_MB` beside the
+recorder. Both answers are reported rather than inferred — `OnDeviceModel.problem()` returns
+the reason in words, and Settings shows it.
 
-| Phone | Small chat | Heavy |
-|---|---|---|
-| 8 GB | Qwen 3 1.7B | none — nothing heavy fits beside ASR |
-| 12 GB (this Razr+) | Qwen 3 1.7B | Qwen 3 4B (charging only) |
-| 16 GB+ | Qwen 3 1.7B | Qwen 3 4B (charging only) |
+The measurement is still snapped by `DeviceCapabilities.marketedRamGb` to the size the phone
+is sold as, because no Android API reports the RAM on the box: a 12 GB phone reports 10.5 to
+11.6 GiB, and comparing that raw figure against a threshold is how a 12 GB phone used to be
+treated as an 8 GB one.
 
-Whether a 12 GB phone can actually hold the 8B instead of the 4B is a question for the
-on-device benchmark (Settings → Benchmark), not a guess made here.
-
-`app/src/test/java/com/recorder/app/models/ModelCatalogTest.kt` asserts the manifest filenames
-match the names `LocalModelSelector` looks for. Without that, a renamed file downloads
-successfully and is then never found, and the only symptom is an assistant that stays
-unavailable.
+`app/src/test/java/com/recorder/app/models/ModelCatalogTest.kt` asserts the manifest's chat
+filename is the one `OnDeviceModel` loads. Without that, a renamed file downloads successfully
+and is then never found, and the only symptom is correction that never runs.
 
 ## Adding a model by hand
 
 ```json
 {
-  "id": "qwen3-1.7b-q4",
+  "id": "some-model-q4",
   "role": "small_chat",
-  "displayName": "Qwen 3 1.7B (Q4_K_M)",
-  "fileName": "qwen3-1.7b-q4.gguf",
-  "url": "https://…/Qwen3-1.7B-Q4_K_M.gguf",
+  "displayName": "Some Model (Q4_K_M)",
+  "fileName": "some-model-q4.gguf",
+  "url": "https://…/Some-Model-Q4_K_M.gguf",
   "revision": "main",
   "sizeBytes": 1120000000,
   "sha256": "…64 hex chars…",
   "license": "Apache-2.0",
-  "minRamTier": "LOW_8GB",
-  "required": false,
+  "required": true,
   "archive": null,
   "hashVerified": true,
   "notes": "Shown to the user on the download screen."
@@ -93,11 +94,11 @@ curl -sL "<url>" | sha256sum
 
 Fields that matter:
 
-- `role` — `vad`, `asr`, `small_chat` or `heavy`. An unknown role is skipped, not fatal.
-- `minRamTier` — the lowest tier allowed to offer it: `LOW_8GB` or `MID_12GB`. Nothing in
-  this build needs more, so a 16 GB phone is offered exactly what a 12 GB one is.
-  The wizard preselects the largest model a tier can host.
-- `required` — the user cannot untick it, and setup is not "complete" without it.
+- `role` — `vad`, `asr` or `small_chat`. An unknown role is skipped, not fatal. Replacing the
+  `small_chat` entry also means changing `OnDeviceModel.FILE_NAME`, which the test above
+  checks, and its headroom figure.
+- `required` — the user cannot untick it, and setup is not "complete" without it. Everything
+  in 3.0's manifest is required.
 - `archive` — `tar.bz2`, or null. Archives are unpacked into the role's directory, flattened,
   keeping only `*.onnx` and `tokens.txt`; entry paths are checked so a malformed archive
   cannot write outside the target directory.
@@ -114,7 +115,7 @@ actually carries a hash.
 |---|---|
 | `vad` | `files/models/silero_vad.onnx` |
 | `asr` | `files/models/asr/` (encoder, decoder, joiner, tokens) |
-| `small_chat`, `heavy` | `files/models/llm/*.gguf` |
+| `small_chat` | `files/models/llm/*.gguf` |
 
 App-private storage, so uninstalling the app removes the models, and nothing else on the
 phone can read your transcripts or the models beside them.

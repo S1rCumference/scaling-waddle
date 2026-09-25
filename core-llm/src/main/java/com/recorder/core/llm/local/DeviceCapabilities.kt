@@ -8,11 +8,12 @@ import android.os.BatteryManager
 import android.util.Log
 import java.io.File
 
-enum class RamTier { LOW_8GB, MID_12GB, HIGH_16GB_PLUS }
-
 /**
- * Everything model-size related is decided from the RAM actually in the phone, never
- * hardcoded to the device this was first written for.
+ * Whether this phone has the memory to run the one model, and nothing more than that.
+ *
+ * It used to sort phones into three tiers and hand each a different model. 3.0 ships one
+ * model, so the only question left is whether there is enough RAM at all — a floor, not a
+ * ladder. What survives from the tiering is the measurement itself, because it is subtle.
  *
  * The subtlety that matters: no Android API reports the RAM printed on the box. The kernel
  * and firmware reserve a slice before Linux ever sees it, so a 12 GB phone typically reports
@@ -35,11 +36,17 @@ object DeviceCapabilities {
      */
     private const val OVERSHOOT_TOLERANCE = 0.97
 
-    fun ramTier(context: Context): RamTier = when (marketedRamGb(context)) {
-        in 0..8 -> RamTier.LOW_8GB
-        in 9..12 -> RamTier.MID_12GB
-        else -> RamTier.HIGH_16GB_PLUS
-    }
+    /**
+     * The least memory this app will try to run a language model on.
+     *
+     * Below this the recorder still records and still transcribes — those are the parts that
+     * matter — but loading a gigabyte of weights beside the capture pipeline on a 4 GB phone
+     * gets one of them killed, so correction is simply not offered.
+     */
+    const val MIN_RAM_GB = 6
+
+    /** True when this phone has the memory for the correction model at all. */
+    fun enoughRamForAModel(context: Context): Boolean = marketedRamGb(context) >= MIN_RAM_GB
 
     /** The RAM this phone is sold as, derived from what the kernel reports. */
     fun marketedRamGb(context: Context): Int = snapToMarketedGb(measuredRamGib(context))
@@ -52,10 +59,7 @@ object DeviceCapabilities {
     /** True when the system is already under memory pressure — never load a model into that. */
     fun isLowMemory(context: Context): Boolean = memoryInfo(context).lowMemory
 
-    /**
-     * True while the phone is plugged in. The HIGH tier model is only ever loaded when this
-     * is true: 2.5 GB of weights plus a decode burst is not something to spend battery on.
-     */
+    /** True while the phone is plugged in, which the overnight correction pass requires. */
     fun isCharging(context: Context): Boolean = runCatching {
         val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         when (intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1)) {

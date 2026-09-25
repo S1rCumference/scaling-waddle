@@ -3,7 +3,6 @@ package com.recorder.app.models
 import android.content.Context
 import com.recorder.core.asr.AsrModels
 import com.recorder.core.llm.local.LocalModelRuntime
-import com.recorder.core.llm.local.RamTier
 import java.io.File
 import org.json.JSONObject
 
@@ -14,11 +13,9 @@ enum class ModelRole {
     /** Speech recognition. Without this the app records but produces no text. */
     ASR,
 
-    /** The always-available on-device chat model. */
+    /** The one language model, which corrects transcript lines and nothing else. */
     SMALL_CHAT,
 
-    /** The heavier local model, only offered on phones with the RAM for it. */
-    HEAVY,
 }
 
 /**
@@ -41,7 +38,6 @@ data class ModelEntry(
     val sha256: String?,
     val license: String,
     val licenseUrl: String?,
-    val minRamTier: RamTier,
     val required: Boolean,
     /** "tar.bz2" when the download is an archive to unpack, null for a plain file. */
     val archive: String?,
@@ -54,7 +50,7 @@ data class ModelEntry(
     fun destinationDir(context: Context): File = when (role) {
         ModelRole.VAD -> AsrModels.modelDir(context)
         ModelRole.ASR -> AsrModels.asrDir(context)
-        ModelRole.SMALL_CHAT, ModelRole.HEAVY -> LocalModelRuntime.modelDir(context)
+        ModelRole.SMALL_CHAT -> LocalModelRuntime.modelDir(context)
     }
 
     /**
@@ -141,9 +137,6 @@ object ModelCatalog {
                 sha256 = o.text("sha256")?.lowercase()?.takeIf(::looksLikeSha256),
                 license = o.text("license") ?: "unknown",
                 licenseUrl = o.text("licenseUrl"),
-                minRamTier = RamTier.entries.firstOrNull {
-                    it.name.equals(o.text("minRamTier"), true)
-                } ?: RamTier.LOW_8GB,
                 required = o.optBoolean("required", false),
                 // An allowlist, not "is it non-blank": an unrecognised value means "not an
                 // archive", so a plain file is never handed to the archive unpacker.
@@ -183,26 +176,15 @@ object ModelCatalog {
     }
 
     /**
-     * What this phone should install: everything required, plus one model per role.
+     * What this phone should install: all of it.
      *
-     * The pick per role is the entry for the highest tier this phone qualifies for — not the
-     * largest file. Those happen to coincide today, but the intent is the tier mapping in
-     * models.json, and a future entry that is bigger without being the tier's choice should
-     * not quietly win.
+     * There is nothing to choose any more. The manifest is three required files — voice
+     * detection, speech recognition, correction — and the only reason to leave one out is a
+     * phone without the memory to run the last of them, which [everythingBytes] and the
+     * wizard report rather than silently deciding.
      */
-    fun recommended(all: List<ModelEntry>, tier: RamTier): List<ModelEntry> {
-        fun rank(t: RamTier) = TIER_ORDER.indexOf(t)
-        fun fits(entry: ModelEntry) = rank(entry.minRamTier) <= rank(tier)
+    fun recommended(all: List<ModelEntry>): List<ModelEntry> = all
 
-        return buildList {
-            addAll(all.filter { it.required && fits(it) })
-            listOf(ModelRole.SMALL_CHAT, ModelRole.HEAVY).forEach { role ->
-                all.filter { it.role == role && fits(it) && !it.required }
-                    .maxByOrNull { rank(it.minRamTier) }
-                    ?.let(::add)
-            }
-        }
-    }
-
-    private val TIER_ORDER = listOf(RamTier.LOW_8GB, RamTier.MID_12GB, RamTier.HIGH_16GB_PLUS)
+    /** The whole download, in bytes, for the one figure the wizard has to be honest about. */
+    fun everythingBytes(all: List<ModelEntry>): Long = all.sumOf { it.sizeBytes }
 }

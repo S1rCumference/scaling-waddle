@@ -1,24 +1,18 @@
 {
-  "version": 2,
+  "version": 3,
   "_comment": [
     "Model manifest. Every URL and sizeBytes here was verified against the Hugging Face Hub,",
     "not copied from a README.",
     "",
+    "3.0 ships three files and no choices: Silero for voice detection, Parakeet for speech",
+    "recognition, and Gemma 3 1B for transcript correction. There is no RAM tier, no per-role",
+    "pick and no charging-only model. A phone either has enough memory to run this set or it",
+    "records without correcting.",
+    "",
     "Digests: the VAD and ASR entries carry SHA-256 values computed by downloading those exact",
-    "URLs and hashing the bytes. The GGUF chat models do not, because their digests are not",
-    "retrievable without downloading several gigabytes each. Their sizeBytes are exact, which",
-    "is what catches the realistic failure (a truncated or interrupted download); a substituted",
-    "file would not be caught, and hashVerified:false says so. The installer treats a null",
-    "digest as size-checked only and the UI tells the user.",
-    "",
-    "Three tiers, and nothing that cannot run on 12 GB:",
-    "  LOW    6-8 GB   all-day: Gemma 3 1B (0.81 GB). No heavy model: nothing bigger fits.",
-    "  MEDIUM 12 GB    all-day: Qwen 3 1.7B (1.11 GB). Sized for all-day use beside ASR.",
-    "  HIGH   12 GB    charging and idle only: Qwen 3 4B (2.50 GB).",
-    "",
-    "Dropped: Phi-4-mini (2.49 GB, the same size as Qwen 3 4B but weaker for the heavy role,",
-    "and far too heavy to hold all day) and Qwen 3 8B (5.03 GB of weights, which does not load",
-    "reliably beside the recorder on 12 GB \u2014 it is not offered rather than offered and killed)."
+    "URLs and hashing the bytes. The GGUF does not, because its digest is not retrievable",
+    "without downloading it; its sizeBytes is exact, which is what catches the realistic",
+    "failure of a truncated or interrupted download, and hashVerified:false says so."
   ],
   "models": [
     {
@@ -32,7 +26,6 @@
       "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
       "license": "MIT",
       "licenseUrl": "https://github.com/snakers4/silero-vad/blob/master/LICENSE",
-      "minRamTier": "LOW_8GB",
       "required": true,
       "archive": null,
       "hashVerified": true,
@@ -49,7 +42,6 @@
       "sha256": "157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad",
       "license": "CC-BY-4.0",
       "licenseUrl": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2",
-      "minRamTier": "LOW_8GB",
       "required": true,
       "archive": "tar.bz2",
       "hashVerified": true,
@@ -66,45 +58,10 @@
       "sha256": null,
       "license": "Gemma Terms of Use",
       "licenseUrl": "https://ai.google.dev/gemma/terms",
-      "minRamTier": "LOW_8GB",
-      "required": false,
+      "required": true,
       "archive": null,
       "hashVerified": false,
-      "notes": "LOW tier (6-8 GB phones): the all-day chat and correction model. 0.81 GB of weights is the most that can sit beside the recorder on an 8 GB phone without the system killing one of them. Under Google's Gemma terms, not a standard open licence."
-    },
-    {
-      "id": "qwen3-1.7b-q4",
-      "role": "small_chat",
-      "displayName": "Qwen 3 1.7B (Q4_K_M)",
-      "fileName": "qwen3-1.7b-q4.gguf",
-      "url": "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf",
-      "revision": "main",
-      "sizeBytes": 1107409472,
-      "sha256": null,
-      "license": "Apache-2.0",
-      "licenseUrl": "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF",
-      "minRamTier": "MID_12GB",
-      "required": false,
-      "archive": null,
-      "hashVerified": false,
-      "notes": "MEDIUM tier (12 GB phones, the default here): the all-day chat and correction model. Chosen for sustained use rather than peak quality \u2014 1.11 GB memory-maps in about a second, so the correction pass every few minutes costs a short CPU burst instead of paging gigabytes in and out all day."
-    },
-    {
-      "id": "qwen3-4b-q4",
-      "role": "heavy",
-      "displayName": "Qwen 3 4B (Q4_K_M)",
-      "fileName": "qwen3-4b-q4.gguf",
-      "url": "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf",
-      "revision": "main",
-      "sizeBytes": 2497280256,
-      "sha256": null,
-      "license": "Apache-2.0",
-      "licenseUrl": "https://huggingface.co/Qwen/Qwen3-4B-GGUF",
-      "minRamTier": "MID_12GB",
-      "required": false,
-      "archive": null,
-      "hashVerified": false,
-      "notes": "HIGH tier (12 GB phones, charging and idle only): the biggest model that loads reliably on 12 GB beside the ASR pipeline. 2.5 GB of weights plus KV cache is about the limit of what a 12 GB phone has free in practice, which is why it is never loaded on battery."
+      "notes": "The only language model in 3.0, and the only thing it is asked to do is correct transcript lines. Chosen because it has no reasoning mode and so cannot emit think tokens, which is what made the previous model spend minutes and a thousand tokens on a one-line correction. Under Google's Gemma terms, not a standard open licence."
     }
   ]
 }

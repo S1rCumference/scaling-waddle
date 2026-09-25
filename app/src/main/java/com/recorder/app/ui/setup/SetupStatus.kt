@@ -41,9 +41,7 @@ object SetupStatus {
 
     fun check(context: Context): List<SetupCheck> {
         val catalog = runCatching { ModelCatalog.load(context) }.getOrDefault(emptyList())
-        val chatModels = catalog.filter {
-            it.role == ModelRole.SMALL_CHAT || it.role == ModelRole.HEAVY
-        }
+        val chatModels = catalog.filter { it.role == ModelRole.SMALL_CHAT }
 
         return listOf(
             micCheck(context),

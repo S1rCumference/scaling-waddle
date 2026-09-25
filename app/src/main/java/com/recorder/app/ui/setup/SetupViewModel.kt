@@ -74,8 +74,10 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
-    val ramTier = DeviceCapabilities.ramTier(application)
     val ramGb = DeviceCapabilities.totalRamGb(application)
+
+    /** False on a phone too small to run the correction model; it still records. */
+    val enoughRam = DeviceCapabilities.enoughRamForAModel(application)
 
     init {
         reload()
@@ -91,7 +93,7 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
             .onFailure { _message.value = "Could not read the model list: ${it.message}" }
             .getOrDefault(emptyList())
 
-        val recommended = ModelCatalog.recommended(all, ramTier).map { it.id }.toSet()
+        val recommended = ModelCatalog.recommended(all).map { it.id }.toSet()
         val previous = _plan.value.associate { it.entry.id to it.selected }
         _plan.value = all.map { entry ->
             Plan(entry, previous[entry.id] ?: (entry.id in recommended))
@@ -124,6 +126,9 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
         _plan.update { list -> list.map { it.copy(selected = true) } }
         startInstall()
     }
+
+    /** Everything this app needs, installed or not: the one honest total. */
+    fun everythingBytes(): Long = ModelCatalog.everythingBytes(models.value.map { it.entry })
 
     /** Total download size of everything selected and not yet installed. */
     fun pendingBytes(): Long =

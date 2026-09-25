@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import com.recorder.app.models.InstallProgress
 import com.recorder.app.service.MicConflict
 import com.recorder.app.service.RecordingService
+import com.recorder.core.llm.local.DeviceCapabilities
 
 /**
  * First-run setup. One decision per screen, in the order that makes the phone work:
@@ -109,12 +110,13 @@ private fun WelcomeStep(viewModel: SetupViewModel) {
     Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Column(Modifier.padding(12.dp)) {
             Text("This phone", style = MaterialTheme.typography.titleSmall)
-            Body("${"%.0f".format(viewModel.ramGb)} GB of memory, tier ${viewModel.ramTier}")
+            Body("${"%.0f".format(viewModel.ramGb)} GB of memory")
             Body(
-                when (viewModel.ramTier.name) {
-                    "LOW_8GB" -> "Enough for recording, transcription and a small assistant."
-                    "MID_12GB" -> "Enough for recording, transcription and a mid-size assistant."
-                    else -> "Enough for the largest assistant this app supports."
+                if (viewModel.enoughRam) {
+                    "Enough for recording, transcription and overnight correction."
+                } else {
+                    "Enough for recording and transcription. Correction needs about " +
+                        "${DeviceCapabilities.MIN_RAM_GB} GB and will not be offered."
                 },
             )
         }
@@ -252,7 +254,9 @@ private fun ModelsStep(viewModel: SetupViewModel) {
     }
 
     Body(
-        "About ${pending / (1024 * 1024)} MB to download. " +
+        "Three files, ${viewModel.everythingBytes() / (1024 * 1024)} MB in total: voice " +
+            "detection, speech recognition and correction. " +
+            "${pending / (1024 * 1024)} MB of that is still to download, and there is " +
             "${free / (1024 * 1024)} MB free on this phone.",
     )
 

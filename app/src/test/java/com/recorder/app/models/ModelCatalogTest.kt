@@ -1,7 +1,6 @@
 package com.recorder.app.models
 
 import com.recorder.core.llm.local.OnDeviceModel
-import com.recorder.core.llm.local.RamTier
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -66,100 +65,39 @@ class ModelCatalogTest {
         }
     }
 
-    @Test
-    fun `an 8GB phone still gets everything required`() {
-        val picked = ModelCatalog.recommended(shipped, RamTier.LOW_8GB)
-        assertTrue(
-            "required models must be recommended on the lowest tier",
-            picked.containsAll(shipped.filter { it.required }),
-        )
-    }
-
-    @Test
-    fun `a bigger phone is never offered less than a smaller one`() {
-        val low = ModelCatalog.recommended(shipped, RamTier.LOW_8GB).size
-        val high = ModelCatalog.recommended(shipped, RamTier.HIGH_16GB_PLUS).size
-        assertTrue("16GB tier offered $high, 8GB tier offered $low", high >= low)
-    }
-
     /**
      * The quiet failure this guards against: a manifest filename the app does not look for.
      * The download succeeds, the file lands on disk, and the model stays unavailable forever
      * with no error anywhere.
      */
     @Test
-    fun `the chat model filename is the one the app loads`() {
+    fun `the one language model is the one the app loads`() {
         val chat = shipped.filter { it.role == ModelRole.SMALL_CHAT }.map { it.fileName }
         assertEquals(listOf(OnDeviceModel.FILE_NAME), chat)
     }
 
+    /** Three files and no choices: 3.0 has nothing to pick between. */
     @Test
-    fun `an 8GB phone is offered a chat model but no heavy one`() {
-        val picked = ModelCatalog.recommended(shipped, RamTier.LOW_8GB)
-        assertTrue(
-            "an 8GB phone should still get a small chat model",
-            picked.any { it.role == ModelRole.SMALL_CHAT },
-        )
-        assertTrue(
-            "nothing heavy fits in 8GB beside ASR and a chat model",
-            picked.none { it.role == ModelRole.HEAVY },
+    fun `the manifest is exactly voice detection, speech recognition and correction`() {
+        assertEquals(3, shipped.size)
+        assertEquals(
+            listOf(ModelRole.VAD, ModelRole.ASR, ModelRole.SMALL_CHAT).sortedBy { it.name },
+            shipped.map { it.role }.sortedBy { it.name },
         )
     }
 
     @Test
-    fun `a 12GB phone gets the medium all-day model and the charging-only one`() {
-        val picked = ModelCatalog.recommended(shipped, RamTier.MID_12GB)
-        assertEquals(
-            "qwen3-1.7b-q4.gguf",
-            picked.first { it.role == ModelRole.SMALL_CHAT }.fileName,
-        )
-        assertEquals(
-            "qwen3-4b-q4.gguf",
-            picked.first { it.role == ModelRole.HEAVY }.fileName,
-        )
+    fun `everything in the manifest is required, because none of it is optional now`() {
+        shipped.forEach { assertTrue("${it.id} should be required", it.required) }
+        assertEquals(shipped, ModelCatalog.recommended(shipped))
     }
 
-    /**
-     * Nothing in this build needs more than 12 GB, so a 16 GB phone is offered exactly the
-     * same models rather than something larger that would not load reliably anyway.
-     */
+    /** The figure the wizard shows, so a regression in it is visible here first. */
     @Test
-    fun `a 16GB phone is offered the same models as a 12GB one`() {
-        assertEquals(
-            ModelCatalog.recommended(shipped, RamTier.MID_12GB).map { it.id },
-            ModelCatalog.recommended(shipped, RamTier.HIGH_16GB_PLUS).map { it.id },
-        )
-    }
-
-    /** Three tiers: two all-day models and one charging-only model, and nothing else. */
-    @Test
-    fun `the manifest holds exactly the three tier models`() {
-        assertEquals(
-            listOf("gemma-3-1b-q4.gguf", "qwen3-1.7b-q4.gguf"),
-            shipped.filter { it.role == ModelRole.SMALL_CHAT }.map { it.fileName }.sorted(),
-        )
-        assertEquals(
-            listOf("qwen3-4b-q4.gguf"),
-            shipped.filter { it.role == ModelRole.HEAVY }.map { it.fileName },
-        )
-    }
-
-    /** Nothing above 12 GB: no entry may be gated on a tier bigger than MID_12GB. */
-    @Test
-    fun `no model requires more than a 12GB phone`() {
-        shipped.forEach { entry ->
-            assertTrue(
-                "${entry.id} is gated on ${entry.minRamTier}, above the 12 GB ceiling",
-                entry.minRamTier == RamTier.LOW_8GB || entry.minRamTier == RamTier.MID_12GB,
-            )
-        }
-    }
-
-    /** The download that actually matters on a 12 GB phone, so a regression is visible. */
-    @Test
-    fun `the 12GB download stays under four gigabytes`() {
-        val bytes = ModelCatalog.recommended(shipped, RamTier.MID_12GB).sumOf { it.sizeBytes }
-        assertTrue("12 GB tier would download $bytes bytes", bytes < 4L * 1024 * 1024 * 1024)
+    fun `the whole download is the sum of the three files and stays under two gigabytes`() {
+        val total = ModelCatalog.everythingBytes(shipped)
+        assertEquals(shipped.sumOf { it.sizeBytes }, total)
+        assertTrue("the whole set would download $total bytes", total < 2L * 1024 * 1024 * 1024)
     }
 
     @Test
