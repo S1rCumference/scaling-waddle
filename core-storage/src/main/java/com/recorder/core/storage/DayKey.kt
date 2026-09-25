@@ -36,6 +36,14 @@ object DayKey {
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
 
+    /** Local midnight at the first of the month [monthKey] (yyyymm). */
+    fun monthStart(monthKey: Int, zone: TimeZone = TimeZone.getDefault()): Long =
+        startOf(monthKey * 100 + 1, zone)
+
+    /** Local midnight at the first of the following month (exclusive end of [monthKey]). */
+    fun monthEnd(monthKey: Int, zone: TimeZone = TimeZone.getDefault()): Long =
+        calendarAt(monthKey * 100 + 1, zone).apply { add(Calendar.MONTH, 1) }.timeInMillis
+
     private fun calendarAt(dayKey: Int, zone: TimeZone): Calendar =
         Calendar.getInstance(zone).apply {
             clear()

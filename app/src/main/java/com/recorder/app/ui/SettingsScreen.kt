@@ -647,6 +647,7 @@ private fun CorrectionSection(viewModel: RecorderViewModel) {
 
     val endOfDay by viewModel.endOfDayEnabled.collectAsState()
     val progress by viewModel.correctionProgress.collectAsState()
+    val summaryProgress by viewModel.summaryProgress.collectAsState()
 
     Text(
         "${OnDeviceModel.LABEL} re-reads a transcript line with the lines around it and fixes " +
@@ -655,8 +656,8 @@ private fun CorrectionSection(viewModel: RecorderViewModel) {
         style = MaterialTheme.typography.bodySmall,
     )
     Text(
-        "Two things start it and nothing else does: this overnight pass, and \"Correct this " +
-            "group\" on a group in Logs. Each batch is capped at " +
+        "Two things start it and nothing else does: this overnight pass, and \"Correct\" " +
+            "on a group in Logs. Each batch is capped at " +
             "${CorrectionRunner.MAX_INPUT_TOKENS} tokens in and " +
             "${TokenBudget.CORRECTION_MAX_TOKENS} out, with 45 seconds a batch and ten minutes " +
             "for the whole pass. Anything that runs past those is abandoned rather than " +
@@ -665,9 +666,19 @@ private fun CorrectionSection(viewModel: RecorderViewModel) {
     )
     Row(verticalAlignment = Alignment.CenterVertically) {
         Switch(checked = endOfDay, onCheckedChange = viewModel::setEndOfDayEnabled)
-        Text("Correct overnight while charging", modifier = Modifier.padding(start = 8.dp))
+        Text("Correct and summarise overnight while charging", modifier = Modifier.padding(start = 8.dp))
     }
+    Text(
+        "After correcting, the same pass names each hour of that day and writes a couple of " +
+            "sentences on it, then rolls the hours up into the day and the days up into the " +
+            "month. Those names are what the groups in Logs are labelled with. Each level is " +
+            "summarised from the level below rather than from the transcript again, which is " +
+            "why a month costs one short call instead of tens of thousands of lines. Any group " +
+            "can be summarised on demand with \"Summarise\" when it is open.",
+        style = MaterialTheme.typography.bodySmall,
+    )
     progress?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    summaryProgress?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
 }
 
 @Composable

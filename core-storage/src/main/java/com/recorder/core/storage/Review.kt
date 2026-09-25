@@ -96,6 +96,50 @@ interface ReviewDao {
     @Query("SELECT * FROM summary_items WHERE id = :id")
     suspend fun item(id: Long): SummaryItem?
 
+    // --- one summary per group -----------------------------------------------------------
+    //
+    // A group summary is a row whose span is exactly the group's: from_ts and to_ts match the
+    // GroupRef. That is why these are equality queries rather than the containment queries
+    // above — an hour inside a day would otherwise come back as the day's own summary.
+
+    /** The newest summary written for exactly this span, or null. */
+    @Query(
+        """
+        SELECT * FROM summary_items
+        WHERE from_ts = :fromTs AND to_ts = :toTs
+        ORDER BY created_ts DESC, id DESC LIMIT 1
+        """
+    )
+    suspend fun forGroup(fromTs: Long, toTs: Long): SummaryItem?
+
+    /**
+     * Summaries of spans strictly inside [fromTs]..[toTs], oldest first — the source a wider
+     * summary is rolled up from. Excludes the enclosing span itself, so a day is never
+     * summarised from its own previous summary.
+     */
+    @Query(
+        """
+        SELECT * FROM summary_items
+        WHERE from_ts >= :fromTs AND to_ts <= :toTs
+          AND NOT (from_ts = :fromTs AND to_ts = :toTs)
+        ORDER BY from_ts ASC, created_ts DESC
+        """
+    )
+    suspend fun within(fromTs: Long, toTs: Long): List<SummaryItem>
+
+    /**
+     * Every summary from the last [limit] written, newest first.
+     *
+     * Read as one flow and indexed by span in the ViewModel, because the Logs calendar needs
+     * the name of every visible row at once and one query per row would be dozens of queries
+     * per scroll.
+     */
+    @Query("SELECT * FROM summary_items ORDER BY from_ts DESC, created_ts DESC LIMIT :limit")
+    fun recent(limit: Int): Flow<List<SummaryItem>>
+
+    @Query("DELETE FROM summary_items WHERE from_ts = :fromTs AND to_ts = :toTs")
+    suspend fun clearGroup(fromTs: Long, toTs: Long)
+
     // --- what the user taught it ---------------------------------------------------------
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

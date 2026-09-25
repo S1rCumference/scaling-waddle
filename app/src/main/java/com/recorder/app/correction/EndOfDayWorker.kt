@@ -8,6 +8,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.recorder.app.ServiceLocator
+import com.recorder.app.summary.SummaryRunner
 import com.recorder.core.storage.DayKey
 import com.recorder.core.storage.Diagnostics
 import java.util.concurrent.TimeUnit
@@ -77,6 +78,23 @@ class EndOfDayWorker(context: Context, params: WorkerParameters) : CoroutineWork
             "overnight pass on $day: $corrected line(s) in ${"%.1f".format(elapsed / 1000.0)}s" +
                 (CorrectionRunner.lastError?.let { " — $it" } ?: ""),
         )
+
+        // Summaries come after correction, in the same sitting, so they are written from the
+        // corrected text rather than raw recognition. Re-checking the gate first: correcting a
+        // day can take minutes, and the phone may have come off the charger or got hot in them.
+        when (val after = CorrectionGate.check(applicationContext)) {
+            is CorrectionGate.Verdict.Blocked ->
+                Diagnostics.i(TAG, "summaries not run: ${after.reason}")
+
+            is CorrectionGate.Verdict.Ready -> {
+                val summarised = SummaryRunner.runDay(day)
+                Diagnostics.i(
+                    TAG,
+                    "overnight summaries on $day: $summarised written" +
+                        (SummaryRunner.lastError?.let { " — $it" } ?: ""),
+                )
+            }
+        }
         return Result.success()
     }
 

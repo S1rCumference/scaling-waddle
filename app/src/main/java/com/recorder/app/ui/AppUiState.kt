@@ -18,7 +18,7 @@ enum class TextMode(val label: String) {
     BOTH("Both"),
 }
 
-enum class GroupKind { HOUR, DAY, RANGE, ALL }
+enum class GroupKind { HOUR, DAY, MONTH, RANGE, ALL }
 
 /** A stretch of transcript the Logs tab can open: an hour, a day, a range, or everything. */
 data class GroupRef(val kind: GroupKind, val fromTs: Long, val toTs: Long) {
@@ -37,6 +37,7 @@ data class GroupRef(val kind: GroupKind, val fromTs: Long, val toTs: Long) {
             DayKey.previous(DayKey.of(now)) -> "Yesterday · ${Clocks.date(fromTs)}"
             else -> Clocks.date(fromTs)
         }
+        GroupKind.MONTH -> Clocks.monthAndYear(fromTs)
         GroupKind.RANGE -> "${Clocks.date(fromTs)} – ${Clocks.date(toTs - 1)}"
     }
 
@@ -49,6 +50,10 @@ data class GroupRef(val kind: GroupKind, val fromTs: Long, val toTs: Long) {
         }
 
         fun day(dayKey: Int): GroupRef = GroupRef(GroupKind.DAY, DayKey.startOf(dayKey), DayKey.endOf(dayKey))
+
+        /** [monthKey] is yyyymm, the key the Logs calendar already groups days by. */
+        fun month(monthKey: Int): GroupRef =
+            GroupRef(GroupKind.MONTH, DayKey.monthStart(monthKey), DayKey.monthEnd(monthKey))
 
         fun parse(id: String): GroupRef? = runCatching {
             val (kind, from, to) = id.split(':')

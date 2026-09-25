@@ -71,7 +71,12 @@ private fun GroupList(viewModel: RecorderViewModel) {
     var searching by remember { mutableStateOf(false) }
     val query by viewModel.logQuery.collectAsState()
     val matches by viewModel.logMatches.collectAsState()
+    // One index for every visible row's name, rather than a query per row per scroll.
+    val summaries by viewModel.summaries.collectAsState()
     val state = rememberSharedListState("logs")
+
+    fun topicOf(group: GroupRef): String? =
+        summaries[viewModel.spanKey(group.fromTs, group.toTs)]?.title
 
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = if (compact) 0.dp else 12.dp), state = state) {
         item {
@@ -110,7 +115,9 @@ private fun GroupList(viewModel: RecorderViewModel) {
             item { SectionLabel("Last 24 hours") }
             items(hours, key = { "h${it.bucket}" }) { hour ->
                 val ref = GroupRef.hour(hour.firstTs)
-                GroupRow(ref.title(), "${hour.count} lines") { viewModel.openGroup(ref) }
+                GroupRow(ref.title(), "${hour.count} lines", topic = topicOf(ref)) {
+                    viewModel.openGroup(ref)
+                }
             }
         }
 
@@ -125,6 +132,7 @@ private fun GroupList(viewModel: RecorderViewModel) {
                         title = monthTitle(month.monthKey),
                         detail = "${month.days.size} day(s) · ${month.lineCount} lines",
                         chevron = if (expanded) "−" else "+",
+                        topic = topicOf(GroupRef.month(month.monthKey)),
                     ) {
                         openMonth = if (expanded) null else month.monthKey
                         viewModel.openDay(null)
@@ -142,6 +150,7 @@ private fun GroupList(viewModel: RecorderViewModel) {
                             detail = "${day.count} lines · $span",
                             indent = 1,
                             chevron = if (dayOpen) "−" else "+",
+                            topic = topicOf(GroupRef.day(day.dayKey)),
                         ) { viewModel.openDay(day.dayKey) }
                     }
                     if (!dayOpen) return@forEach
@@ -157,15 +166,23 @@ private fun GroupList(viewModel: RecorderViewModel) {
                     }
                     items(openDayHours, key = { "dh${day.dayKey}-${it.bucket}" }) { hour ->
                         val ref = GroupRef.hour(hour.firstTs)
-                        GroupRow(ref.title(), "${hour.count} lines", indent = 2) {
+                        GroupRow(ref.title(), "${hour.count} lines", indent = 2, topic = topicOf(ref)) {
                             viewModel.openGroup(ref)
                         }
                     }
-                    // Whole day at once, for asking about it or exporting it.
+                    // Whole day at once, for summarising or exporting it.
                     item(key = "da${day.dayKey}") {
                         GroupRow("The whole day", "${day.count} lines", indent = 2) {
                             viewModel.openGroup(GroupRef.day(day.dayKey))
                         }
+                    }
+                }
+
+                // The month as one group: the widest zoom-out, where the days' topics roll
+                // into what the month was about.
+                item(key = "ma${month.monthKey}") {
+                    GroupRow("The whole month", "${month.lineCount} lines", indent = 1) {
+                        viewModel.openGroup(GroupRef.month(month.monthKey))
                     }
                 }
             }
@@ -277,35 +294,60 @@ private fun monthTitle(monthKey: Int): String {
     return SimpleDateFormat("LLLL yyyy", Locale.getDefault()).format(calendar.time)
 }
 
+/**
+ * One calendar row: the span, how much is in it, and what it was about.
+ *
+ * [topic] is the name the AI gave this stretch of time, and it is the whole point of the
+ * grouping — a month of "14:00–15:00 · 41 lines" is unreadable, a month of named hours is a
+ * list of topics you can scan. It is a second line rather than squeezed onto the first,
+ * because the four-inch screen has room for two short lines and not for one long one.
+ */
 @Composable
 private fun GroupRow(
     title: String,
     detail: String,
     indent: Int = 0,
     chevron: String? = null,
+    topic: String? = null,
     onClick: () -> Unit,
 ) {
     val compact = LocalCompact.current
     val pad = (indent * if (compact) 10 else 16).dp
+    val named = topic?.takeIf { it.isNotBlank() }
     if (compact) {
-        Row(
+        Column(
             Modifier.fillMaxWidth().clickable(onClick = onClick)
                 .padding(start = pad, top = 8.dp, bottom = 8.dp),
         ) {
-            Text(title, color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
-            Text(detail, color = CoverColors.dim, fontSize = 12.sp)
-            chevron?.let { Text(" $it", color = CoverColors.dim, fontSize = 14.sp) }
+            Row {
+                Text(title, color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                Text(detail, color = CoverColors.dim, fontSize = 12.sp)
+                chevron?.let { Text(" $it", color = CoverColors.dim, fontSize = 14.sp) }
+            }
+            named?.let {
+                Text(it, color = CoverColors.live, fontSize = 13.sp, maxLines = 2)
+            }
         }
     } else {
         Card(
             Modifier.fillMaxWidth().padding(start = pad, top = 3.dp, bottom = 3.dp)
                 .clickable(onClick = onClick),
         ) {
-            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                Text(detail, style = MaterialTheme.typography.labelMedium)
-                chevron?.let {
-                    Text("  $it", style = MaterialTheme.typography.titleSmall)
+            Column(Modifier.padding(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                    Text(detail, style = MaterialTheme.typography.labelMedium)
+                    chevron?.let {
+                        Text("  $it", style = MaterialTheme.typography.titleSmall)
+                    }
+                }
+                named?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 2,
+                    )
                 }
             }
         }
@@ -319,11 +361,12 @@ private fun GroupDetail(viewModel: RecorderViewModel, group: GroupRef) {
     val compact = LocalCompact.current
 
     Column(Modifier.fillMaxSize().padding(horizontal = if (compact) 0.dp else 12.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
             TextButton(onClick = { viewModel.openGroup(null) }) { Text("‹ All logs") }
-            Row {
-                TextButton(onClick = { viewModel.openExport(group) }) { Text("Export") }
-                TextButton(onClick = { viewModel.recorrect(group) }) { Text("Correct this group") }
+            TextButton(onClick = { viewModel.openExport(group) }) { Text("Export") }
+            TextButton(onClick = { viewModel.recorrect(group) }) { Text("Correct") }
+            if (viewModel.canSummarise(group)) {
+                TextButton(onClick = { viewModel.summarise(group) }) { Text("Summarise") }
             }
         }
         Text(
@@ -331,6 +374,7 @@ private fun GroupDetail(viewModel: RecorderViewModel, group: GroupRef) {
             style = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
             color = if (compact) Color.White else MaterialTheme.colorScheme.onBackground,
         )
+        GroupTopic(viewModel, group)
 
         Lines(viewModel, Modifier.weight(1f))
     }
@@ -498,4 +542,65 @@ private fun ConfirmDelete(count: Int, onConfirm: () -> Unit, onDismiss: () -> Un
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Keep") } },
     )
+}
+
+
+/**
+ * What this group was about: the name, and a paragraph under it.
+ *
+ * The date is already the heading above, so this is the other two thirds of what was asked
+ * for — the name and the context. Collapsed to the name after the first read, because on the
+ * cover screen the paragraph is most of the screen and the name is what you came for.
+ */
+@Composable
+private fun GroupTopic(viewModel: RecorderViewModel, group: GroupRef) {
+    val compact = LocalCompact.current
+    val summary by viewModel.openGroupSummary.collectAsState()
+    val progress by viewModel.summaryProgress.collectAsState()
+    var expanded by remember(group.id) { mutableStateOf(!compact) }
+    val current = summary
+
+    if (current == null) {
+        // Said rather than implied. A group with no summary and no explanation reads like a
+        // feature that is broken rather than one that has not run yet.
+        if (viewModel.canSummarise(group)) {
+            Text(
+                progress ?: "No summary yet — the overnight pass writes one, or press Summarise.",
+                color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.outline,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(vertical = 2.dp),
+            )
+        }
+        return
+    }
+
+    val body = current.body
+    Column(
+        Modifier.fillMaxWidth()
+            .clickable(enabled = body.isNotBlank()) { expanded = !expanded }
+            .padding(vertical = 4.dp),
+    ) {
+        if (current.title.isNotBlank()) {
+            Text(
+                current.title,
+                color = if (compact) CoverColors.live else MaterialTheme.colorScheme.primary,
+                style = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
+            )
+        }
+        if (body.isNotBlank()) {
+            Text(
+                body,
+                color = if (compact) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = if (compact) 13.sp else 15.sp,
+                maxLines = if (expanded) Int.MAX_VALUE else 2,
+            )
+        }
+        progress?.let {
+            Text(
+                it,
+                color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.outline,
+                fontSize = 11.sp,
+            )
+        }
+    }
 }

@@ -82,7 +82,7 @@ Also check **Flagged**: "remind me" should have produced a flag.
 
 ## 5. Correction and export
 
-1. Open a group in **Logs** → **Correct this group**.
+1. Open a group in **Logs** → **Correct**.
 
 Expected: a progress line with a Cancel button, then a count of corrected lines. Switch the
 group to **Corrected** or **Both** to see them; the original is always kept.

@@ -55,25 +55,58 @@ setting is remembered as the next export's default, with a Reset button. Files a
 setting, except CSV and JSON Lines, which stay ISO and 24-hour so a spreadsheet does not have
 to guess.
 
+## Deleting a recording
+
+The app over-captures on purpose, so the way out of something it should not have kept is to
+throw the line away afterwards. **Swipe a line either way in Live**, or long-press to select in
+Logs and press **Delete n**. It is a real delete: the line, its corrections, its keyword flags
+and any summary that covered it all go, in one transaction. There is no bin and no hidden
+"deleted" column for a later query to forget about.
+
+One undo is offered while the message is still on screen — on the snackbar on the inner screen,
+beside the status line on the cover screen. It holds the removed rows in memory and nowhere
+else, which is the honest bound: a swipe you want back, you want back within seconds, and
+promising more would mean not really deleting anything.
+
 ## The AI, such as it is
 
-One model, Gemma 3 1B Q4, doing one job: re-reading a transcript line with the lines around it
-and fixing misheard words. The original is never overwritten — corrections are appended beside
-it and labelled with the pass and the model.
+One model, Gemma 3 1B Q4, doing two jobs on text it has already recorded. Nothing here sees
+audio.
 
-It was chosen for what it cannot do. It has no reasoning mode, so it cannot emit think tokens,
-which is what made the previous model spend two minutes and a thousand tokens on a one-line
-correction.
+**Correcting.** Re-reading a transcript line with the lines around it and fixing misheard words.
+The original is never overwritten — corrections are appended beside it and labelled with the
+pass and the model.
+
+**Summarising a group.** Each group in Logs gets a name and a couple of sentences: what that
+hour, day or month was about. The name is the point — a month of "14:00–15:00 · 41 lines" is
+unreadable, a month of named hours is a list of topics you can scan — so it goes on the calendar
+row itself, not just inside the group.
+
+The levels **roll up rather than re-read**. An hour is summarised from its transcript lines, a
+day from its hours' summaries, a month from its days'. That is the only shape that fits on a
+phone: a month is thirty short paragraphs in and one out, where summarising a month from raw
+transcript would be tens of thousands of lines through a 1B model. Each summary is one row in
+`summary_items`, whose span is exactly the group's — so no schema change was needed, and
+deleting lines drops the summary that covered them.
+
+The model was chosen for what it cannot do. It has no reasoning mode, so it cannot emit think
+tokens, which is what made the previous model spend two minutes and a thousand tokens on a
+one-line correction.
 
 It runs in exactly two situations:
 
 1. **Overnight**, once, while charging, with the screen off, above 30% battery, and not already
-   hot. It corrects the day that just ended.
-2. **On demand**, from "Correct this group" in Logs, with a Cancel button while it runs.
+   hot. It corrects the day that just ended, then names its hours, then the day, then the month.
+   The gate is re-checked between the two halves, because correcting a day takes minutes and the
+   phone can come off the charger in them.
+2. **On demand**, from "Correct" or "Summarise" on a group in Logs, with a Cancel button while
+   it runs.
 
-Every ceiling is enforced in code, not asked for: 1200 input tokens a batch, 256 output, 45
-seconds a batch, ten minutes for the whole pass. Anything that runs past those is abandoned and
-the reason recorded; nothing retries. The model is unloaded the moment the pass ends.
+Every ceiling is enforced in code, not asked for: 1200 input tokens a batch and 256 out for a
+correction, 220 out for a summary whatever the span, 45 seconds a correction batch, 75 seconds a
+summary, ten minutes for a correction pass and twelve for a day's roll-up. Anything that runs
+past those is abandoned and the reason recorded; nothing retries. The model is unloaded the
+moment the work ends.
 
 ## Target device
 
@@ -90,7 +123,7 @@ again. See [docs/MODELS.md](docs/MODELS.md).
 |---|---|---|---|
 | Silero VAD v6.2.3 | voice detection | 2 MB | MIT |
 | Parakeet TDT 0.6B v2 INT8 | speech recognition | 460 MB | CC-BY-4.0 |
-| Gemma 3 1B Instruct Q4_K_M | transcript correction | 769 MB | Gemma Terms |
+| Gemma 3 1B Instruct Q4_K_M | correction and summaries | 769 MB | Gemma Terms |
 
 Nothing is bundled in the APK. "Installed" means the exact byte count from the manifest for a
 plain file, or a complete install record for an unpacked archive — not "a file of that name

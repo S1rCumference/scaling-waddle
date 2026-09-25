@@ -59,6 +59,26 @@ data class TokenBudget(
             label = "repair",
         )
 
+        /**
+         * A group summary: a name and two or three sentences, so the ceiling is small and
+         * fixed. It does not scale with the size of the group — a month is not allowed a
+         * longer answer than an hour, because the point of the roll-up is that it stays
+         * readable as the span grows.
+         */
+        const val SUMMARY_MAX_TOKENS = 220
+
+        /**
+         * Longer than a correction batch. A summary is one call per group rather than one of
+         * many, and a model that has just been loaded pays for the first tokens.
+         */
+        const val SUMMARY_DEADLINE_MS = 75_000L
+
+        fun forSummary(label: String): TokenBudget = TokenBudget(
+            maxTokens = SUMMARY_MAX_TOKENS,
+            deadlineMs = SUMMARY_DEADLINE_MS,
+            label = "summary of one $label",
+        )
+
         /** A transcript line is short; 40 tokens covers a long one with room to spare. */
         private const val TOKENS_PER_LINE = 40
     }

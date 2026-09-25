@@ -31,7 +31,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  *
  * Two ways in, one at a time (a single lock, since they share one model slot):
  *  - [runDay]: the overnight pass over the day that just ended, run by [EndOfDayWorker];
- *  - [runRange]: "Correct this group", pressed in Logs.
+ *  - [runRange]: "Correct", pressed on a group in Logs.
  *
  * The live batches that used to run every three or fifteen minutes are gone. They were the
  * whole reason the phone was warm all day, and the work they did was the same work the
@@ -103,7 +103,7 @@ object CorrectionRunner {
         corrected
     }
 
-    /** "Correct this group", pressed in Logs. The only on-demand path. */
+    /** "Correct", pressed on a group in Logs. The only on-demand path. */
     suspend fun runRange(fromTs: Long, toTs: Long): Int = lock.withLock {
         val segments = db.transcripts().inRange(fromTs, toTs)
         runBatches(segments, CorrectionPass.MANUAL, "Correcting this group")

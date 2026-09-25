@@ -27,6 +27,9 @@ import android.content.ClipboardManager
 import android.content.Intent
 import com.recorder.app.correction.CorrectionGate
 import com.recorder.app.data.Deletions
+import com.recorder.app.summary.SummaryRunner
+import com.recorder.app.summary.asGroupSummary
+import com.recorder.core.llm.GroupSummary
 import com.recorder.app.correction.CorrectionRunner
 import com.recorder.app.export.ExportGrouping
 import com.recorder.app.export.ExportQuery
@@ -339,6 +342,58 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     fun forgetUndo() = Deletions.forget()
 
+    // --- What each group was about ---------------------------------------------------------
+    //
+    // Hours are the topics; a day is its hours rolled up; a month is its days. The name of each
+    // group is what makes a month of recordings scannable, so it is on the calendar row itself
+    // rather than only inside the group.
+
+    /**
+     * Every summary, indexed by the span it covers, so a calendar row can look up its own name
+     * without a query per row. One flow for the whole list: the calendar shows dozens of rows
+     * and re-queries them on every scroll.
+     */
+    val summaries: StateFlow<Map<String, GroupSummary>> =
+        db.review().recent(SUMMARY_INDEX_LIMIT)
+            .map { rows ->
+                rows.asSequence()
+                    // Newest first out of the query, so the first row for a span wins.
+                    .distinctBy { it.fromTs to it.toTs }
+                    .associate { spanKey(it.fromTs, it.toTs) to it.asGroupSummary() }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** The summary of the group that is open, or null when it has none yet. */
+    val openGroupSummary: StateFlow<GroupSummary?> =
+        combine(AppUiState.openGroup, summaries) { group, index ->
+            group?.let { index[spanKey(it.fromTs, it.toTs)] }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** What is being summarised, for the group screen. Null when nothing is. */
+    val summaryProgress: StateFlow<String?> = SummaryRunner.progress
+
+    /** Whether [group] is a span that can be summarised at all. */
+    fun canSummarise(group: GroupRef): Boolean = SummaryRunner.levelOf(group) != null
+
+    /**
+     * "Summarise", pressed on a group. Replaces whatever summary it had.
+     *
+     * Runs on IO because the work is a model blocking in native code, and reports through the
+     * same progress surface as correction so it can be cancelled from the bar on either screen.
+     */
+    fun summarise(group: GroupRef) {
+        if (!canSummarise(group)) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val summary = runCatching { SummaryRunner.run(group) }.getOrNull()
+            _status.value = when {
+                summary != null -> summary.title.ifBlank { "Summarised." }
+                else -> SummaryRunner.lastError ?: "Could not summarise this group."
+            }
+        }
+    }
+
+    fun spanKey(fromTs: Long, toTs: Long): String = "$fromTs:$toTs"
+
     /**
      * Corrects one group, now, because the user pressed the button.
      *
@@ -516,7 +571,10 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
                     onlyIds = onlyIds,
                     range = if (onlyIds.isEmpty() && group != null) ExportRange.CUSTOM else current.range,
                     customFromDay = group?.let { DayKey.of(it.fromTs) } ?: current.customFromDay,
-                    customToDay = group?.let { DayKey.of(it.toTs) } ?: current.customToDay,
+                    // toTs is exclusive — the next midnight for a day or a month, and the next
+                    // day for the 23:00 hour — while customToDay is inclusive. Without the
+                    // step back, exporting one day exported two, and a month 32 days.
+                    customToDay = group?.let { DayKey.of(it.toTs - 1) } ?: current.customToDay,
                 )
             }
         }
@@ -897,6 +955,15 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         /** One query per pause in typing, not one per keystroke. */
         const val SEARCH_DEBOUNCE_MS = 250L
         const val SEARCH_LIMIT = 80
+
+        /**
+         * How many group summaries are held for the calendar's row names.
+         *
+         * At most 24 hours plus a day plus a month per day recorded, so this covers roughly
+         * three months of continuous use. Older rows are still in the database and still
+         * appear when their group is opened; they just do not get a name on the row.
+         */
+        const val SUMMARY_INDEX_LIMIT = 2_000
 
         /** One recount per pause in typing, not one per keystroke. */
         const val COUNT_DEBOUNCE_MS = 250L

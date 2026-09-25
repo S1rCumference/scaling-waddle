@@ -46,6 +46,9 @@ object Clocks {
     /** A date with no time in it, which the clock setting has nothing to say about. */
     fun date(ts: Long): String = format("EEE d MMM", ts)
 
+    /** "September 2026" — the label a month-wide group carries. */
+    fun monthAndYear(ts: Long): String = format("LLLL yyyy", ts)
+
     private fun format(pattern: String, ts: Long): String =
         SimpleDateFormat(pattern, Locale.getDefault()).format(Date(ts))
 }
