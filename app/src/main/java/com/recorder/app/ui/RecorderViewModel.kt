@@ -19,7 +19,6 @@ import com.recorder.app.update.UpdateChecker
 import com.recorder.app.service.RecordingService
 import com.recorder.core.llm.local.DeviceCapabilities
 import com.recorder.core.llm.local.OnDeviceModel
-import com.recorder.core.llm.local.LocalModelRuntime as Runtime
 import com.recorder.core.storage.FlaggedItem
 import com.recorder.core.storage.Folder
 import com.recorder.core.storage.TranscriptSegment
@@ -44,6 +43,7 @@ import com.recorder.core.storage.DayKey
 import com.recorder.core.storage.CorrectionRunRecord
 import com.recorder.core.storage.DaySummary
 import com.recorder.app.StartupGuard
+import com.recorder.app.diag.DeviceWatch
 import com.recorder.app.diag.SelfReport
 import com.recorder.app.models.ModelHealth
 import com.recorder.core.storage.Diagnostics
@@ -707,6 +707,15 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     /** Live setup checks, re-read each time rather than remembered from the wizard. */
     fun setupChecks(): List<SetupCheck> = SetupStatus.check(getApplication())
 
+    /** One line for the Settings row: the battery, and how many checks are not passing. */
+    fun batterySummary(): String {
+        val context = getApplication<Application>()
+        val battery = DeviceWatch.read(context)
+        val failing = runCatching { setupChecks().count { !it.ok } }.getOrDefault(0)
+        return battery.describe().substringBefore(", thermal") +
+            if (failing > 0) " · $failing check(s) to fix" else " · all checks pass"
+    }
+
     private val updateChecker by lazy { UpdateChecker(getApplication<Application>()) }
 
     private val _update = MutableStateFlow<String?>(null)
@@ -749,47 +758,6 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
                 },
                 onFailure = { _update.value = "Download failed: ${it.message}" },
             )
-        }
-    }
-
-    private val _benchmark = MutableStateFlow<String?>(null)
-    val benchmark: StateFlow<String?> = _benchmark.asStateFlow()
-
-    private val _benchmarkRunning = MutableStateFlow(false)
-    val benchmarkRunning: StateFlow<Boolean> = _benchmarkRunning.asStateFlow()
-
-    /**
-     * Measures this phone with the model that is actually installed, using the backend's own
-     * benchmark. Numbers for the README come from here, run on the device — there is no way
-     * to produce them off it, so none are guessed.
-     */
-    fun runBenchmark() {
-        if (_benchmarkRunning.value) return
-        _benchmarkRunning.value = true
-        _benchmark.value = "Loading the model and measuring. This takes a minute."
-
-        viewModelScope.launch(Dispatchers.IO) {
-            val context = getApplication<Application>()
-            val spec = OnDeviceModel.selected(context)
-            _benchmark.value = if (spec == null) {
-                "Cannot measure: ${OnDeviceModel.problem(context)}"
-            } else {
-                val model = Runtime.load(context, spec)
-                if (model == null) {
-                    "Could not load ${spec.fileName}. Settings -> Diagnostics has the detail."
-                } else {
-                    val report = model.benchmark()
-                    Runtime.unload()
-                    buildString {
-                        append("Model: ").append(spec.label).append('\n')
-                        append("RAM: ").append("%.1f".format(DeviceCapabilities.totalRamGb(context)))
-                        append(" GB measured, ").append(DeviceCapabilities.availableRamMb(context))
-                        append(" MB free now\n\n")
-                        append(report ?: "This backend does not expose a benchmark.")
-                    }
-                }
-            }
-            _benchmarkRunning.value = false
         }
     }
 

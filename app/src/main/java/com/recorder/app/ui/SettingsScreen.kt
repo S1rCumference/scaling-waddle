@@ -57,24 +57,16 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
     val taughtCount by viewModel.taughtCorrections.collectAsState()
     val pendingCount by viewModel.pendingCorrections.collectAsState()
     val overnightOn by viewModel.endOfDayEnabled.collectAsState()
+    val diagnostics by viewModel.diagnostics.collectAsState()
+    val diagnosticCount = diagnostics.size
+    val modelReady = remember(pendingCount) { viewModel.modelStatus().substringAfter("— ") }
+    val batteryLine = remember(diagnosticCount) { viewModel.batterySummary() }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(if (LocalCompact.current) 4.dp else 16.dp),
     ) {
         Group("Recording") {
         Section("Microphone sensitivity", "mic", value = "Opens a segment at ${"%.2f".format(threshold)}") { MicSensitivitySection(viewModel) }
-            Section("Times", "clock", value = if (use24Hour) "24-hour" else "12-hour") {
-                Choice(
-                    "Clock",
-                    listOf("12-hour" to false, "24-hour" to true),
-                    use24Hour,
-                ) { viewModel.setUse24HourClock(it) }
-                Text(
-                    "Applies everywhere a time is shown: the live feed, the logs, " +
-                        "diagnostics and exports.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
         Section("Flag phrases", "flags", value = if (triggers.isEmpty()) "None set" else "${triggers.size} phrase(s)") {
             Text(
                 "Comma separated. Any transcript line containing one of these gets flagged.",
@@ -96,7 +88,7 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
         }
         }
         Group("AI") {
-        Section("Models", "models") { ModelsSection(viewModel, onRunSetup) }
+        Section("Model", "models", value = modelReady) { ModelsSection(viewModel, onRunSetup) }
         Section(
             "Correction",
             "correction",
@@ -113,12 +105,12 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
         ) { TaughtSection(viewModel) }
         }
         Group("Data") {
-        Section("Export defaults", "export") { ExportDefaultsSection(viewModel) }
-        Section("Diagnostics", "diagnostics") { DiagnosticsSection(viewModel) }
-        Section("Self-diagnostic report", "report") { SelfReportSection(viewModel) }
+        Section("Export defaults", "export", value = "Set on the Export screen") { ExportDefaultsSection(viewModel) }
+        Section("Diagnostics", "diagnostics", value = "${diagnosticCount} entries") { DiagnosticsSection(viewModel) }
+        Section("Self-diagnostic report", "report", value = "Built on demand") { SelfReportSection(viewModel) }
         }
         Group("Device") {
-        Section("Battery and setup status", "status") {
+        Section("Battery and setup status", "status", value = batteryLine) {
             val context = LocalContext.current
             // Recomputed on each recomposition on purpose: these can change behind the app's
             // back, so a cached answer would be a lie.
@@ -144,7 +136,7 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
                 }
             }
         }
-        Section("Power report", "power") {
+        Section("Power report", "power", value = "Measured on this phone") {
             Card(Modifier.fillMaxWidth()) {
                 Text(
                     viewModel.powerReport(),
@@ -153,7 +145,7 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
                 )
             }
         }
-        Section("Surviving a reboot", "reboot") {
+        Section("Surviving a reboot", "reboot", value = if (viewModel.deviceOwnerActive()) "Device owner" else "Not device owner") {
             Text(
                 viewModel.deviceOwnerStatus(),
                 style = MaterialTheme.typography.bodySmall,
@@ -188,7 +180,7 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
                 }
             }
         }
-        Section("Lock down this phone", "lockdown") {
+        Section("Lock down this phone", "lockdown", value = if (viewModel.lockdownAvailable()) "Available" else "Not available") {
             Text(
                 "Suspends the dialer, messaging, the Play Store and other apps so only the " +
                     "recorder runs. Every change is recorded and reversible.",
@@ -208,47 +200,20 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
                 }
             }
         }
-        Section("This device", "device") {
-            Card(Modifier.fillMaxWidth()) {
-                Text(
-                    viewModel.deviceSummary(),
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(12.dp),
-                )
-            }
-        }
-        }
-        Group("Advanced") {
-        Section("Benchmark", "benchmark") {
-            val benchmarkText by viewModel.benchmark.collectAsState()
-            val running by viewModel.benchmarkRunning.collectAsState()
+        Section("Time format", "clock", value = if (use24Hour) "24-hour" else "12-hour") {
+            Choice(
+                "Clock",
+                listOf("12-hour" to false, "24-hour" to true),
+                use24Hour,
+            ) { viewModel.setUse24HourClock(it) }
             Text(
-                "Measures this phone with the installed model. The numbers in the README " +
-                    "come from running this here; they cannot be produced anywhere else.",
+                "Applies everywhere a time is shown: the live feed, the logs, diagnostics and " +
+                    "the readable export formats. CSV and JSON Lines stay 24-hour so a " +
+                    "spreadsheet does not have to guess.",
                 style = MaterialTheme.typography.bodySmall,
             )
-            Button(onClick = viewModel::runBenchmark, enabled = !running) {
-                Text(if (running) "Measuring…" else "Run benchmark")
-            }
-            benchmarkText?.let { report ->
-                Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                    Text(
-                        report,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(12.dp),
-                    )
-                }
-            }
         }
-        Section("Re-run setup", "setup") {
-            Text(
-                "Re-run the setup wizard to download or remove models, redo permissions, or " +
-                    "walk through the cover-screen settings again.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Button(onClick = onRunSetup) { Text("Run setup again") }
-        }
-        Section("Updates", "updates") {
+        Section("Updates", "updates", value = "v${com.recorder.app.BuildConfig.VERSION_NAME}") {
             val updateText by viewModel.update.collectAsState()
             Text(
                 "Downloads the newest release from GitHub and hands it to Android to install. " +

@@ -29,12 +29,20 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 PREFIX="$(grep '^recorder.releaseAssetPrefix=' gradle.properties | cut -d= -f2)"
 APP_ID="$(grep -oE 'applicationId = "[^"]+"' app/build.gradle.kts | head -1 | cut -d'"' -f2)"
 
-# Pinned to this tag when built from one, so the page always describes the build whose
-# digests it is showing; otherwise releases/latest, which keeps working for future releases.
-case "$VERSION" in
-  v[0-9]*) BASE="https://github.com/$OWNER/$REPO/releases/download/$VERSION" ;;
-  *)       BASE="https://github.com/$OWNER/$REPO/releases/latest/download" ;;
-esac
+# Always releases/latest, never the version this run happens to be building.
+#
+# This used to pin to $VERSION whenever it looked like a tag, on the reasoning that the page
+# should describe the build whose digests it is showing. That is wrong for the provisioning QR
+# in a way that only shows up on a phone: the page is rebuilt on every push, and a push whose
+# release step is skipped (because that version is already published) or fails leaves the QR
+# pointing at a tag that holds an older build — or at a tag that does not exist at all, which
+# fails silently half way through device-owner setup with the phone already wiped.
+#
+# releases/latest/download always resolves to the newest published non-prerelease release, so
+# the QR and the download buttons agree with each other and with what is actually installable.
+# The digests below say which version they were computed from rather than being implied by a
+# pinned URL.
+BASE="https://github.com/$OWNER/$REPO/releases/latest/download"
 RAZR_URL="$BASE/$PREFIX-razr-release.apk"
 STANDARD_URL="$BASE/$PREFIX-standard-release.apk"
 CHECKSUMS_URL="$BASE/SHA256SUMS"
@@ -48,6 +56,7 @@ RAZR_SIZE="about 35 MB"
 STANDARD_SIZE="about 35 MB"
 RAZR_SHA="Published in SHA256SUMS with each release."
 STANDARD_SHA="Published in SHA256SUMS with each release."
+DIGEST_NOTE="Digests are published in SHA256SUMS beside each release."
 QR_SECTION=""
 
 if [ -n "$DIST" ] && [ -d "$DIST" ]; then
@@ -60,6 +69,10 @@ if [ -n "$DIST" ] && [ -d "$DIST" ]; then
   [ -f "$std_apk" ] && STANDARD_SIZE="$(human_size "$(stat -c%s "$std_apk")")"
   [ -f "$razr_apk" ] && RAZR_SHA="$(sha256sum "$razr_apk" | cut -d' ' -f1)"
   [ -f "$std_apk" ] && STANDARD_SHA="$(sha256sum "$std_apk" | cut -d' ' -f1)"
+  # Named, because the links point at releases/latest and these were computed from the build
+  # this page was rendered by. If the two ever differ, the digest is the one to distrust.
+  DIGEST_NOTE="Digests computed from the $VERSION build. The links above always fetch the
+    newest published release; check them against that release's SHA256SUMS."
 fi
 
 # --- Device-owner provisioning QR ---------------------------------------------------------
@@ -172,6 +185,7 @@ replacements = {
     "__COMMIT__": """${COMMIT:0:12}""",
     "__QR_SECTION__": '''$QR_SECTION''',
     "__ASSET_PREFIX__": """$PREFIX""",
+    "__DIGEST_NOTE__": """$DIGEST_NOTE""",
 }
 for key, value in replacements.items():
     html = html.replace(key, value)
