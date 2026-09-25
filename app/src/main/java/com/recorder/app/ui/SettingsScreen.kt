@@ -262,6 +262,9 @@ private fun SelfReportSection(viewModel: RecorderViewModel) {
             TextButton(onClick = { viewModel.copy(text) }) { Text("Copy") }
             TextButton(onClick = { viewModel.shareText(text) }) { Text("Share…") }
         }
+        // Clears the counters this report is built from, not just the text on screen — so the
+        // next one answers "did that fix it?" instead of repeating last week's numbers.
+        TextButton(onClick = viewModel::clearDiagnostics) { Text("Clear") }
     }
     val text = report ?: return
     Card(Modifier.fillMaxWidth()) {
@@ -287,7 +290,7 @@ private fun DiagnosticsSection(viewModel: RecorderViewModel) {
     Row(Modifier.padding(vertical = 6.dp)) {
         Button(onClick = viewModel::copyDiagnostics) { Text("Copy") }
         TextButton(onClick = viewModel::shareDiagnostics) { Text("Share…") }
-        TextButton(onClick = viewModel::clearDiagnostics) { Text("Clear") }
+        TextButton(onClick = viewModel::clearDiagnostics) { Text("Clear all") }
     }
     if (entries.isEmpty()) {
         Text("Nothing logged yet.", style = MaterialTheme.typography.bodySmall)

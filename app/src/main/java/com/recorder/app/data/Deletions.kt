@@ -98,6 +98,27 @@ object Deletions {
         undone.segments.size
     }
 
+    /**
+     * Deletes every line in a span — an hour, a day, a month — and returns how many went.
+     *
+     * The whole point of grouping Logs by hour and day is that a stretch of time is the unit
+     * people think in, and "it recorded something it should not have" is almost always about a
+     * stretch rather than a line. Deleting one line at a time was never the right size of
+     * gesture for it.
+     *
+     * Reads the ids first and then goes through [delete], so a range delete is undoable on
+     * exactly the same terms as a swipe rather than being a second, quieter code path.
+     */
+    suspend fun deleteRange(fromTs: Long, toTs: Long): Int {
+        val ids = db.transcripts().inRange(fromTs, toTs).map { it.id }
+        if (ids.isEmpty()) return 0
+        return delete(ids)
+    }
+
+    /** How many lines a span holds, so a confirmation can say the number before it is gone. */
+    suspend fun countIn(fromTs: Long, toTs: Long): Int =
+        db.transcripts().inRange(fromTs, toTs).size
+
     /** Puts the last delete back, ids and all. Returns how many lines returned. */
     suspend fun undoLast(): Int = lock.withLock {
         val held = _undo.value ?: return@withLock 0

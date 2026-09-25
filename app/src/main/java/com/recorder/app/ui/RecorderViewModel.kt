@@ -31,6 +31,7 @@ import com.recorder.app.summary.SummaryRunner
 import com.recorder.app.summary.asGroupSummary
 import com.recorder.core.llm.GroupSummary
 import com.recorder.app.correction.CorrectionRunner
+import com.recorder.app.correction.OnDemandAiWorker
 import com.recorder.app.export.ExportGrouping
 import com.recorder.app.export.ExportQuery
 import com.recorder.app.export.ExportRange
@@ -50,6 +51,7 @@ import com.recorder.app.StartupGuard
 import com.recorder.app.diag.DeviceWatch
 import com.recorder.app.diag.SelfReport
 import com.recorder.app.models.ModelHealth
+import com.recorder.core.storage.AiPasses
 import com.recorder.core.storage.Diagnostics
 import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
@@ -342,6 +344,33 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     fun forgetUndo() = Deletions.forget()
 
+    /**
+     * Deletes a whole group — the hour, day or month that is open, or a row in the calendar.
+     *
+     * The unit people actually want. Deleting a stretch of the day one line at a time was never
+     * a real answer to "it recorded something it should not have", and the calendar already
+     * groups the recording into exactly the stretches worth throwing away.
+     *
+     * Live updates itself: it reads the transcript as a Room Flow, so the hour disappears from
+     * the live feed the moment its rows go, with nothing to refresh and nothing to invalidate.
+     */
+    fun deleteGroup(group: GroupRef) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val removed = runCatching { Deletions.deleteRange(group.fromTs, group.toTs) }
+                .getOrElse { error ->
+                    Diagnostics.w(TAG, "group delete failed", error)
+                    _status.value = "Could not delete: ${error.message ?: error.javaClass.simpleName}"
+                    return@launch
+                }
+            if (removed > 0 && AppUiState.openGroup.value == group) AppUiState.open(null)
+            _status.value = if (removed > 0) "Deleted $removed line(s)." else "Nothing in that group."
+        }
+    }
+
+    /** How many lines a group holds, for the confirmation that names the number. */
+    suspend fun groupSize(group: GroupRef): Int =
+        runCatching { Deletions.countIn(group.fromTs, group.toTs) }.getOrDefault(0)
+
     // --- What each group was about ---------------------------------------------------------
     //
     // Hours are the topics; a day is its hours rolled up; a month is its days. The name of each
@@ -383,13 +412,8 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
      */
     fun summarise(group: GroupRef) {
         if (!canSummarise(group)) return
-        viewModelScope.launch(Dispatchers.IO) {
-            val summary = runCatching { SummaryRunner.run(group) }.getOrNull()
-            _status.value = when {
-                summary != null -> summary.title.ifBlank { "Summarised." }
-                else -> SummaryRunner.lastError ?: "Could not summarise this group."
-            }
-        }
+        OnDemandAiWorker.enqueue(getApplication(), OnDemandAiWorker.JOB_SUMMARISE, group)
+        _status.value = "Summarising ${group.title()}…"
     }
 
     fun spanKey(fromTs: Long, toTs: Long): String = "$fromTs:$toTs"
@@ -402,13 +426,8 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
      */
     fun recorrect(group: GroupRef) {
         if (group.kind == GroupKind.ALL) return
-        viewModelScope.launch(Dispatchers.IO) {
-            val count = runCatching { CorrectionRunner.runRange(group.fromTs, group.toTs) }.getOrDefault(0)
-            _status.value = when {
-                count > 0 -> "Corrected $count line(s)."
-                else -> CorrectionRunner.lastError ?: "Nothing to correct in this group."
-            }
-        }
+        OnDemandAiWorker.enqueue(getApplication(), OnDemandAiWorker.JOB_CORRECT, group)
+        _status.value = "Correcting ${group.title()}…"
     }
 
     fun copy(text: String) {
@@ -436,9 +455,24 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     fun shareDiagnostics() = shareText(diagnosticsText())
 
+    /**
+     * Clears both reports, for real.
+     *
+     * "Clear" used to empty the log list and nothing else, so the next self-diagnostic report
+     * came back with the same model passes, the same battery transitions and the same totals as
+     * the one before it — which makes the report useless for answering "did that fix it?", the
+     * only question anybody generates one to answer.
+     *
+     * Everything a report reads and that this process owns is reset: the log entries, the
+     * recorded model passes and the battery and thermal transitions. The transcription totals
+     * belong to the running recorder and reset when it restarts, which the report says.
+     */
     fun clearDiagnostics() {
         Diagnostics.clear()
-        _status.value = "Diagnostics cleared"
+        AiPasses.clear()
+        DeviceWatch.clear()
+        _selfReport.value = null
+        _status.value = "Diagnostics and reports cleared"
     }
 
     private val _selfReport = MutableStateFlow<String?>(null)
@@ -752,7 +786,18 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     val runningTasks: StateFlow<List<RunningTasks.Task>> = RunningTasks.tasks
 
     /** Stops whatever is running. Actually stops it; it does not just hide the bar. */
-    fun cancelRunning() = RunningTasks.cancelAll()
+    /**
+     * Cancel, pressed on the progress bar.
+     *
+     * Two things now, because the work no longer lives in a ViewModel: the in-flight generation
+     * is asked to unwind through its registered cancel, and the WorkManager job hosting it is
+     * cancelled too. Cancelling only the first would leave the worker alive to start the next
+     * batch; cancelling only the second would leave the model generating until it noticed.
+     */
+    fun cancelRunning() {
+        RunningTasks.cancelAll()
+        OnDemandAiWorker.cancel(getApplication())
+    }
 
     // --- AI scheduling ---------------------------------------------------------------------
 

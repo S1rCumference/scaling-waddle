@@ -58,6 +58,7 @@ class LocalModelProvider(
                         maxTokens = budget.maxTokens,
                         deadlineMs = budget.deadlineMs,
                         label = budget.label,
+                        freshContext = budget.freshContext,
                     ).trim(),
                 )
             } ?: LlmResponse.unavailable(

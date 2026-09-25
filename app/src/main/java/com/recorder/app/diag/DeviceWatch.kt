@@ -87,6 +87,12 @@ object DeviceWatch {
     /** Newest first. */
     fun recent(): List<Event> = synchronized(lock) { events }
 
+    /**
+     * Forgets the recorded transitions, so the next report is about what happens next rather
+     * than about last week. The one-a-minute heartbeat starts filling it again immediately.
+     */
+    fun clear() = synchronized(lock) { events = emptyList() }
+
     private fun add(what: String) {
         synchronized(lock) { events = (listOf(Event(System.currentTimeMillis(), what)) + events).take(KEEP) }
         // Also to Diagnostics: these are exactly the entries that explain a quiet night, and

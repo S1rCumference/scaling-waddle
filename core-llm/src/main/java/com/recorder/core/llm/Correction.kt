@@ -3,54 +3,95 @@ package com.recorder.core.llm
 import com.recorder.core.storage.TranscriptSegment
 
 /**
- * One slice of transcript to correct. [before] and [after] are there so the model can use
- * the conversation around a line to decide what was actually said; only [targets] are
- * rewritten. [vocabulary] is the day's recurring names and terms, used by the end-of-day
- * pass so the whole day informs every window without the whole day fitting in one prompt.
+ * One slice of transcript to correct, with the day's recurring names and terms.
+ *
+ * There is no longer a `before`/`after` split. The old design asked the model to rewrite a
+ * handful of target lines while reading the lines around them; the new one reads a whole
+ * stretch at once and reports only the words it believes were misheard, so every line in the
+ * window is both context and target.
  */
 data class CorrectionWindow(
-    val before: List<String>,
     val targets: List<TranscriptSegment>,
-    val after: List<String>,
     val vocabulary: List<String> = emptyList(),
 )
 
 /**
+ * One word or short phrase that speech recognition got wrong, and what was really said.
+ *
+ * This is the whole output of a correction pass now, and the reason the pass is usable at all.
+ *
+ * The old design had the model echo every line back with its corrections applied. On this
+ * phone the model generates about 8 tokens a second, so echoing an hour of transcript — around
+ * four thousand tokens — is eight and a half minutes of generation for a pass that usually
+ * changes a dozen words. It never finished inside any honest ceiling, and when the ceiling cut
+ * it off mid-answer the whole batch was thrown away.
+ *
+ * Reporting only substitutions makes the output proportional to the number of mistakes rather
+ * than the length of the transcript: a dozen of these is under fifty tokens, or about six
+ * seconds. It also matches how recognition actually fails. A name or a piece of jargon is
+ * misheard the same way every time it is said, so one substitution fixes every occurrence
+ * instead of the model having to get the same line right once per batch.
+ */
+data class Mishearing(val wrong: String, val right: String) {
+
+    /** Whole-word, case-insensitive. Built once per fix rather than per line. */
+    internal val pattern: Regex by lazy {
+        // \b does not work at a boundary that is not a word character, and transcript text is
+        // full of those, so the edges are asserted by hand.
+        Regex("(?<![\\p{L}\\p{N}])" + Regex.escape(wrong) + "(?![\\p{L}\\p{N}])", RegexOption.IGNORE_CASE)
+    }
+
+    fun appliesTo(text: String): Boolean = pattern.containsMatchIn(text)
+
+    fun applyTo(text: String): String = pattern.replace(text, Regex.escapeReplacement(right))
+}
+
+/** One line after correction: what to store beside the original. */
+data class CorrectedLine(
+    val segmentId: Long,
+    val text: String,
+    /** Which substitutions changed this line, for the log and the diagnostic report. */
+    val applied: List<Mishearing> = emptyList(),
+)
+
+/**
  * Prompt building and answer parsing for the correction pass. Pure, so it is unit tested
- * without a model: the parsing is where a small model's sloppiness has to be absorbed.
+ * without a model: the parsing and the guards are where a 1B model's sloppiness has to be
+ * absorbed, and they are the only thing standing between a hallucination and the record.
  */
 object CorrectionPrompt {
 
-    /** How the draft pass flags a word it guessed at. */
-    const val OPEN_MARK = "<<"
-    const val CLOSE_MARK = ">>"
+    /** What the model writes between the misheard text and the real text. */
+    const val ARROW = ">"
+
+    /** What it writes when it found nothing, so "no answer" and "nothing wrong" differ. */
+    const val NOTHING = "NONE"
 
     /**
-     * The draft pass. Fast, and told to admit what it does not know rather than guess.
+     * Told to find substitutions, not to rewrite anything.
      *
-     * Marking is the whole point of splitting the work: whatever comes back marked is the
-     * only thing the second pass has to look at, so the expensive careful reading happens on
-     * a handful of phrases instead of the whole transcript.
+     * "Copied exactly" is load-bearing: [parse] throws away any substitution whose left side
+     * does not literally appear in the transcript, which is what makes a hallucinated fix
+     * impossible rather than merely unlikely. Saying so in the prompt means the model usually
+     * produces usable fixes instead of having most of them discarded.
      */
-    const val SYSTEM_DRAFT =
-        "You fix speech-recognition errors in transcripts of the user's own conversations. " +
-            "Some words were misheard as similar-sounding ones. Use the surrounding conversation " +
-            "to decide what was really said, and fix only those words. Example: in a conversation " +
-            "about videos someone posted, \"go through my contacts\" should be \"go through my " +
-            "content\". Never rephrase, summarise, shorten, translate or add anything. Keep filler " +
-            "words and the speaker's own grammar. If a line is already right, repeat it exactly. " +
-            "Wrap any word or phrase you are not sure about in $OPEN_MARK and $CLOSE_MARK, like " +
-            "$OPEN_MARK this $CLOSE_MARK. Mark generously: a marked guess is useful, a confident " +
-            "wrong answer is not. Answer immediately without reasoning first."
-
-    /** The repair pass. Sees only what the draft marked, with the lines either side of it. */
-    const val SYSTEM_REPAIR =
-        "You are resolving the uncertain parts of an almost-finished transcript. Each line " +
-            "contains one or more phrases wrapped in $OPEN_MARK and $CLOSE_MARK that the first " +
-            "pass was unsure about. Use the surrounding conversation to decide what was really " +
-            "said and replace each marked phrase with your best answer, removing the marks. If " +
-            "you still cannot tell, leave that phrase marked exactly as it is. Change nothing " +
-            "outside the marks. Answer immediately without reasoning first."
+    val SYSTEM: String = buildString {
+        append("You find words that speech recognition heard wrong in a transcript of the ")
+        append("user's own conversations. Some words were misheard as similar-sounding ones. ")
+        append("Use the surrounding conversation to work out what was really said.\n\n")
+        append("Reply with one line for each mistake, in exactly this form:\n")
+        append("wrong $ARROW right\n\n")
+        append("The left side must be text copied exactly from the transcript. The right side ")
+        append("is what was really said. Both sides are just the words — no line numbers, no ")
+        append("quotes, no explanation, no bullet points.\n")
+        append("Example: contacts $ARROW content\n\n")
+        append("Only list a word when you are confident it is wrong, and only when the right ")
+        append("version sounds like the wrong one. A mistake you miss costs nothing. A word you ")
+        append("change wrongly corrupts the record.\n")
+        append("Do not fix grammar, filler words, punctuation or capitalisation. Do not rewrite ")
+        append("or shorten anything. Only misheard words.\n")
+        append("If nothing was misheard, reply with the single word $NOTHING.")
+    }
 
     fun build(window: CorrectionWindow): String = buildString {
         if (window.vocabulary.isNotEmpty()) {
@@ -58,113 +99,142 @@ object CorrectionPrompt {
             append(window.vocabulary.joinToString(", "))
             append("\n\n")
         }
-        if (window.before.isNotEmpty()) {
-            append("Earlier in the conversation (context only, do not output):\n")
-            window.before.forEach { append("- ").append(it).append('\n') }
-            append('\n')
+        append("Transcript:\n")
+        window.targets.forEach { segment ->
+            append("- ").append(segment.text.replace('\n', ' ').trim()).append('\n')
         }
-        append("Lines to correct:\n")
-        window.targets.forEachIndexed { i, segment ->
-            append(i + 1).append("| ").append(segment.text.replace('\n', ' ')).append('\n')
-        }
-        if (window.after.isNotEmpty()) {
-            append("\nLater in the conversation (context only, do not output):\n")
-            window.after.forEach { append("- ").append(it).append('\n') }
-        }
-        append("\nReply with exactly one line for each numbered line, in the same form: ")
-        append("the number, a | and the corrected text. Output nothing else.")
+        append("\nList the misheard words now, one per line, as: wrong $ARROW right\n")
+        append("Reply $NOTHING if there are none.")
     }
 
-    /** The repair prompt: only the lines the draft left marked, with their neighbours. */
-    fun buildRepair(marked: List<String>, context: List<String>): String = buildString {
-        if (context.isNotEmpty()) {
-            append("The conversation around these lines (context only, do not output):\n")
-            context.forEach { append("- ").append(it).append('\n') }
-            append('\n')
-        }
-        append("Lines with uncertain parts:\n")
-        marked.forEachIndexed { i, text ->
-            append(i + 1).append("| ").append(text.replace('\n', ' ')).append('\n')
-        }
-        append("\nReply with exactly one line for each numbered line, in the same form: ")
-        append("the number, a | and the line with each marked phrase resolved. Output nothing else.")
-    }
-
-    private val markPattern = Regex(
-        Regex.escape(OPEN_MARK) + "(.*?)" + Regex.escape(CLOSE_MARK),
-        RegexOption.DOT_MATCHES_ALL,
-    )
-
-    /** The phrases the model admitted it guessed at. */
-    fun marks(text: String): List<String> =
-        markPattern.findAll(text).map { it.groupValues[1].trim() }.filter { it.isNotEmpty() }.toList()
-
-    fun hasMarks(text: String): Boolean = markPattern.containsMatchIn(text)
-
-    /** The same line with the marks taken off, which is what gets stored and read. */
-    fun stripMarks(text: String): String =
-        markPattern.replace(text) { it.groupValues[1].trim() }
-            .replace(Regex("\\s{2,}"), " ")
-            .trim()
-
-    private val numbered = Regex("""^\s*\**\s*(\d{1,3})\s*[|:.)\]]\s?(.*)$""")
+    /** Characters either side of the arrow that a model likes to decorate its answers with. */
+    private const val DECORATION = "*`\"'•-–—: \t"
 
     /**
-     * Maps target index → text the model returned, for lines it actually returned. Lines it
-     * skipped are absent. The first answer for a number wins; the model sometimes repeats
-     * the list.
+     * Reads substitutions out of whatever the model produced, and throws away everything it
+     * cannot vouch for.
+     *
+     * [source] is the transcript the fixes have to apply to. Every guard here exists because
+     * the alternative is a 1B model quietly rewriting somebody's record of a conversation:
+     *
+     *  - the left side must literally appear in [source], which makes an invented fix impossible;
+     *  - both sides must be non-empty and different, case-insensitively;
+     *  - the left side must be at least [MIN_WRONG_CHARS], so "a" $ARROW "the" cannot fire on
+     *    every line in the window;
+     *  - the two sides must be within a factor of [MAX_LENGTH_RATIO] of each other, because a
+     *    mishearing sounds like what was said and a paraphrase does not;
+     *  - neither side may span more than [MAX_WORDS] words, because that is a rewrite;
+     *  - at most [MAX_FIXES] survive, so one confused answer cannot rewrite a whole hour.
      */
-    fun parse(output: String, targetCount: Int): Map<Int, String> {
-        val result = linkedMapOf<Int, String>()
-        output.lineSequence().forEach { line ->
-            val match = numbered.find(line) ?: return@forEach
-            val index = match.groupValues[1].toInt() - 1
-            // Models decorate: "**3.** text", "3| \"text\"". Keep only the text.
-            val text = match.groupValues[2].trim().trim('*', '"').trim()
-            if (index in 0 until targetCount && index !in result && text.isNotEmpty()) {
-                result[index] = text
+    fun parse(reply: String, source: String): List<Mishearing> {
+        val trimmed = reply.trim()
+        if (trimmed.isBlank()) return emptyList()
+        if (trimmed.equals(NOTHING, ignoreCase = true)) return emptyList()
+
+        val seen = HashSet<String>()
+        val fixes = mutableListOf<Mishearing>()
+        for (raw in trimmed.lineSequence()) {
+            val line = raw.trim()
+            if (line.isEmpty()) continue
+            // The model sometimes answers NONE after a preamble, or mid-list.
+            if (line.equals(NOTHING, ignoreCase = true)) continue
+            val arrow = line.indexOf(ARROW)
+            if (arrow <= 0) continue
+
+            val wrong = line.substring(0, arrow).trim { it in DECORATION }
+            val right = line.substring(arrow + ARROW.length).trim { it in DECORATION }
+            if (!usable(wrong, right, source)) continue
+            // The same substitution twice is the model repeating itself, not two fixes.
+            if (!seen.add(wrong.lowercase())) continue
+
+            fixes += Mishearing(wrong, right)
+            if (fixes.size >= MAX_FIXES) break
+        }
+        return fixes
+    }
+
+    private fun usable(wrong: String, right: String, source: String): Boolean {
+        if (wrong.length < MIN_WRONG_CHARS || right.isEmpty()) return false
+        if (wrong.equals(right, ignoreCase = true)) return false
+        if (words(wrong) > MAX_WORDS || words(right) > MAX_WORDS) return false
+        val ratio = right.length.toDouble() / wrong.length
+        if (ratio < 1.0 / MAX_LENGTH_RATIO || ratio > MAX_LENGTH_RATIO) return false
+        // The one guard that makes a hallucinated fix impossible rather than unlikely.
+        return Mishearing(wrong, right).appliesTo(source)
+    }
+
+    /**
+     * Applies [fixes] to [targets] and returns only the lines that actually changed.
+     *
+     * A line nothing applied to is not stored: a correction row identical to the original is
+     * noise in the log and in the "how many lines changed" figure.
+     */
+    fun apply(targets: List<TranscriptSegment>, fixes: List<Mishearing>): List<CorrectedLine> {
+        if (fixes.isEmpty()) return emptyList()
+        val out = mutableListOf<CorrectedLine>()
+        for (segment in targets) {
+            var text = segment.text
+            val applied = mutableListOf<Mishearing>()
+            for (fix in fixes) {
+                if (!fix.appliesTo(text)) continue
+                text = fix.applyTo(text)
+                applied += fix
             }
-        }
-        return result
-    }
-
-    /**
-     * Guards the original against a model that paraphrased, summarised or invented instead
-     * of correcting. A correction keeps roughly the same length and mostly the same words;
-     * anything else is rejected and the line is kept as spoken.
-     */
-    fun plausible(original: String, corrected: String): Boolean {
-        val o = words(original)
-        val c = words(corrected)
-        if (c.isEmpty()) return false
-        if (o.size < 4) return kotlin.math.abs(c.size - o.size) <= 2
-        val ratio = c.size.toDouble() / o.size
-        if (ratio < 0.6 || ratio > 1.5) return false
-        val originalSet = o.toSet()
-        val kept = c.count { it in originalSet }.toDouble() / c.size
-        return kept >= 0.5
-    }
-
-    /**
-     * What to store per target, given the model's answer. Lines the model skipped *between*
-     * lines it answered were looked at and left alone, so they count as unchanged. Lines
-     * after the last one it answered were probably cut off by the token limit and are left
-     * for the next batch rather than being marked done.
-     */
-    fun resolve(targets: List<TranscriptSegment>, parsed: Map<Int, String>): Map<Long, String> {
-        if (parsed.isEmpty()) return emptyMap()
-        val last = parsed.keys.max()
-        val out = linkedMapOf<Long, String>()
-        for (i in 0..last) {
-            val original = targets[i].text
-            val candidate = parsed[i]
-            out[targets[i].id] = if (candidate != null && plausible(original, candidate)) candidate else original
+            if (applied.isNotEmpty() && text != segment.text) {
+                out += CorrectedLine(segmentId = segment.id, text = text, applied = applied)
+            }
         }
         return out
     }
 
-    private fun words(text: String): List<String> =
-        text.lowercase().split(Regex("[^\\p{L}\\p{N}']+")).filter { it.isNotBlank() }
+    /** The transcript as one string, which is what [parse] checks a fix against. */
+    fun sourceText(targets: List<TranscriptSegment>): String =
+        targets.joinToString("\n") { it.text }
+
+    private fun words(text: String): Int = text.trim().split(Regex("\\s+")).count { it.isNotBlank() }
+
+    /** Shorter than this and a substitution fires on half the transcript. */
+    const val MIN_WRONG_CHARS = 3
+
+    /** A mishearing is a word or two, not a clause. */
+    const val MAX_WORDS = 4
+
+    /** A mishearing sounds like what was said, so the two are a similar length. */
+    const val MAX_LENGTH_RATIO = 2.5
+
+    /** One answer may not rewrite a whole hour, however confident it sounds. */
+    const val MAX_FIXES = 24
+}
+
+/**
+ * Runs one window through a provider and returns the lines that changed.
+ *
+ * One call, not two. The old draft-then-repair pair existed to spend the careful pass only on
+ * phrases the fast pass admitted to guessing at — a reasonable trade when the output was a
+ * rewrite of every line, and pure cost now that the output is a short list of substitutions.
+ */
+class TranscriptCorrector(private val provider: LlmProvider) {
+
+    suspend fun correct(window: CorrectionWindow): Result<List<CorrectedLine>> {
+        if (window.targets.isEmpty()) return Result.success(emptyList())
+
+        val response = provider.complete(
+            listOf(
+                ChatMessage(Role.SYSTEM, CorrectionPrompt.SYSTEM),
+                ChatMessage(Role.USER, CorrectionPrompt.build(window)),
+            ),
+            TokenBudget.forFixes(),
+        )
+        if (response.isError) {
+            return Result.failure(IllegalStateException(response.error ?: "model unavailable"))
+        }
+
+        val source = CorrectionPrompt.sourceText(window.targets)
+        val fixes = CorrectionPrompt.parse(response.text, source)
+        // No fixes is a success with nothing to store, not a failure. The model reading an
+        // hour and finding nothing misheard is the common and correct outcome.
+        return Result.success(CorrectionPrompt.apply(window.targets, fixes))
+    }
 }
 
 /** The recurring names and terms in a day, cheaply, without a model. */
@@ -176,7 +246,7 @@ object DayVocabulary {
         "right", "should", "something", "still", "that's", "their", "there", "these", "thing",
         "things", "think", "those", "through", "today", "want", "we're", "what's", "where",
         "which", "while", "would", "yeah", "you're", "actually", "basically", "everything",
-        "people", "little", "okay", "there's", "they're", "about", "other", "never", "always",
+        "people", "little", "okay", "there's", "they're", "other", "never", "always",
     )
 
     fun extract(texts: List<String>, limit: Int = 40): List<String> {
@@ -200,96 +270,5 @@ object DayVocabulary {
             .sortedByDescending { it.value }
             .take(limit)
             .map { display[it.key] ?: it.key }
-    }
-}
-
-/** One line after correction: what to store, and what the model would not commit to. */
-data class CorrectedLine(
-    val segmentId: Long,
-    val text: String,
-    /** Phrases the model marked and the repair pass could not resolve either. */
-    val uncertain: List<String> = emptyList(),
-)
-
-/**
- * Runs one correction window through a provider as two short passes.
- *
- * One long pass was the problem: a 1.7B model asked to do careful work on twenty lines
- * reasons about all of them at once, and on a phone that is two minutes of saturated CPU for
- * a result nobody is waiting on. Splitting it means the first pass is quick and admits what
- * it guessed, and the second pass only ever sees those admissions — usually a couple of
- * phrases — so the careful expensive reading is spent where it changes the answer.
- *
- * The second pass is skipped entirely when the first marked nothing, which is the common case.
- */
-class TranscriptCorrector(private val provider: LlmProvider) {
-
-    suspend fun correct(window: CorrectionWindow): Result<List<CorrectedLine>> {
-        if (window.targets.isEmpty()) return Result.success(emptyList())
-
-        // --- pass 1: fast draft, marking anything it is unsure about ---------------------
-        val draft = provider.complete(
-            listOf(
-                ChatMessage(Role.SYSTEM, CorrectionPrompt.SYSTEM_DRAFT),
-                ChatMessage(Role.USER, CorrectionPrompt.build(window)),
-            ),
-            TokenBudget.forLines(window.targets.size),
-        )
-        if (draft.isError) {
-            return Result.failure(IllegalStateException(draft.error ?: "model unavailable"))
-        }
-        val drafted = CorrectionPrompt.resolve(
-            window.targets,
-            CorrectionPrompt.parse(draft.text, window.targets.size),
-        )
-        if (drafted.isEmpty()) {
-            return Result.failure(IllegalStateException("the model's answer had no numbered lines"))
-        }
-
-        // --- pass 2: only the marked lines, if there are any -----------------------------
-        val markedIds = drafted.filterValues { CorrectionPrompt.hasMarks(it) }.keys.toList()
-        val repaired: Map<Long, String> = if (markedIds.isEmpty()) {
-            emptyMap()
-        } else {
-            repair(markedIds.map { it to drafted.getValue(it) }, window)
-        }
-
-        return Result.success(
-            drafted.map { (id, draftText) ->
-                val finalText = repaired[id] ?: draftText
-                CorrectedLine(
-                    segmentId = id,
-                    text = CorrectionPrompt.stripMarks(finalText),
-                    uncertain = CorrectionPrompt.marks(finalText),
-                )
-            },
-        )
-    }
-
-    private suspend fun repair(
-        marked: List<Pair<Long, String>>,
-        window: CorrectionWindow,
-    ): Map<Long, String> {
-        val texts = marked.map { it.second }
-        val spans = texts.sumOf { CorrectionPrompt.marks(it).size }
-        val response = provider.complete(
-            listOf(
-                ChatMessage(Role.SYSTEM, CorrectionPrompt.SYSTEM_REPAIR),
-                ChatMessage(Role.USER, CorrectionPrompt.buildRepair(texts, window.before + window.after)),
-            ),
-            TokenBudget.forRepair(spans),
-        )
-        // A failed repair is not a failed correction: the draft still stands, marks and all.
-        if (response.isError) return emptyMap()
-        val parsed = CorrectionPrompt.parse(response.text, texts.size)
-        return parsed.mapNotNull { (index, text) ->
-            val (id, draftText) = marked.getOrNull(index) ?: return@mapNotNull null
-            // The repair may only resolve marks, never rewrite the line.
-            if (CorrectionPrompt.plausible(CorrectionPrompt.stripMarks(draftText), CorrectionPrompt.stripMarks(text))) {
-                id to text
-            } else {
-                null
-            }
-        }.toMap()
     }
 }

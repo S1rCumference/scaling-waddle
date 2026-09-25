@@ -51,22 +51,38 @@ object SummaryRunner {
     private const val TASK = "summary"
 
     /**
-     * Transcript lines an hour's summary is built from.
+     * Total characters of source a summary prompt may carry.
      *
-     * An hour of dense speech can be several hundred lines, which is more than a 1B model will
-     * read usefully and more than the context window wants. The cap is on lines rather than
-     * characters because the lines are short and evenly sized.
+     * This is the number that made summarising never finish. The previous version capped 120
+     * lines at 400 characters each, which is up to 48,000 characters — roughly 12,000 tokens
+     * against a native context of 8,192. The prompt overflowed the context, and an overflowed
+     * context is not an error: it is a model reading a truncated prompt and answering slowly
+     * and badly, with nothing anywhere saying why.
+     *
+     * 6,000 characters is about 1,500 tokens, which leaves the context most of its room even
+     * after the system prompt and the answer.
      */
-    private const val MAX_SOURCE_LINES = 120
+    internal const val MAX_SOURCE_CHARS = 6_000
 
     /** Characters per source item, so one enormous line cannot fill the prompt by itself. */
-    private const val MAX_SOURCE_CHARS = 400
+    internal const val MAX_ITEM_CHARS = 300
+
+    /** Fewer than this and the shape of the hour is lost, so items are shortened rather than dropped. */
+    private const val MIN_SOURCE_ITEMS = 12
 
     /** An hour with less than this in it is not a topic, it is a passing noise. */
     const val MIN_LINES_FOR_HOUR = 3
 
-    /** The whole roll-up for one day: its hours, the day, and the month it falls in. */
-    private const val DAY_ROLLUP_DEADLINE_MS = 12 * 60 * 1000L
+    /**
+     * The whole roll-up for one day: its hours, the day, and the month it falls in.
+     *
+     * Sized to fit inside a WorkManager worker, which is stopped at about ten minutes — and to
+     * leave room for the correction pass the overnight worker runs first. A day with twenty-four
+     * busy hours needs more than this on a phone that generates at eight tokens a second, and
+     * does not get it: it stores the hours it finished and says how far it got, and the next run
+     * carries on from there rather than starting over.
+     */
+    private const val DAY_ROLLUP_DEADLINE_MS = 4 * 60 * 1000L
 
     private val lock = Mutex()
 
@@ -196,13 +212,15 @@ object SummaryRunner {
 
         val source = if (level.sourceIsSummaries) {
             if (fillGaps) fillMissingParts(group, level)
-            db.review().within(group.fromTs, group.toTs)
-                .distinctBy { it.fromTs to it.toTs }
-                .map { row ->
-                    val part = row.asGroupSummary()
-                    "${part.title}: ${part.body}".trim(':', ' ')
-                }
-                .filter { it.isNotBlank() }
+            thinToFit(
+                db.review().within(group.fromTs, group.toTs)
+                    .distinctBy { it.fromTs to it.toTs }
+                    .map { row ->
+                        val part = row.asGroupSummary()
+                        "${part.title}: ${part.body}".trim(':', ' ')
+                    }
+                    .filter { it.isNotBlank() },
+            )
         } else {
             transcriptLines(group)
         }
@@ -289,16 +307,57 @@ object SummaryRunner {
 
     /**
      * The text an hour is summarised from: corrected where a correction exists, original where
-     * it does not. The newest lines are the ones dropped when there are too many, because an
-     * hour is usually named by how it started.
+     * it does not, thinned to fit [MAX_SOURCE_CHARS].
+     *
+     * Thinned by sampling evenly across the span rather than by taking the first N lines. The
+     * first version took the first 120, which meant a busy hour was named after its first ten
+     * minutes and the rest of it never reached the model at all — the summary was confidently
+     * about the wrong thing.
      */
     private suspend fun transcriptLines(group: GroupRef): List<String> {
         val segments = db.transcripts().inRange(group.fromTs, group.toTs)
         if (segments.isEmpty()) return emptyList()
         val corrections = db.corrections().forSegments(segments.map { it.id }).latestBySegment()
-        return segments.take(MAX_SOURCE_LINES).map { segment ->
-            (corrections[segment.id]?.text ?: segment.text).take(MAX_SOURCE_CHARS)
+        val lines = segments.map { (corrections[it.id]?.text ?: it.text).trim() }
+            .filter { it.isNotEmpty() }
+        return thinToFit(lines)
+    }
+
+    /**
+     * Cuts [lines] down to [MAX_SOURCE_CHARS], keeping the span covered end to end.
+     *
+     * Takes every nth line so the sample is spread across the whole stretch, then shortens what
+     * is left if it still does not fit. Shortening is the last resort rather than the first:
+     * half of every line is worse input than all of every other line.
+     */
+    internal fun thinToFit(lines: List<String>): List<String> {
+        if (lines.isEmpty()) return emptyList()
+        var kept = lines.map { it.take(MAX_ITEM_CHARS) }
+        // Each item costs its own characters plus the "- " and newline around it.
+        fun cost(items: List<String>) = items.sumOf { it.length + 3 }
+
+        if (cost(kept) <= MAX_SOURCE_CHARS) return kept
+
+        // Every nth line, spread across the span. Chosen so the result is under the ceiling in
+        // one step rather than by repeated halving, which would overshoot on a long hour.
+        val stride = ((cost(kept).toDouble() / MAX_SOURCE_CHARS) + 0.999).toInt().coerceAtLeast(2)
+        kept = kept.filterIndexed { index, _ -> index % stride == 0 }
+        if (kept.size < MIN_SOURCE_ITEMS) {
+            kept = lines.take(MIN_SOURCE_ITEMS).map { it.take(MAX_ITEM_CHARS) }
         }
+
+        // Still over — long lines rather than many of them. Shorten what is left, evenly.
+        while (cost(kept) > MAX_SOURCE_CHARS && kept.isNotEmpty()) {
+            val room = (MAX_SOURCE_CHARS / kept.size - 3).coerceAtLeast(20)
+            val shorter = kept.map { it.take(room) }
+            if (shorter == kept) {
+                // Cannot shrink further without dropping items; drop the tail instead.
+                kept = kept.dropLast(1)
+            } else {
+                kept = shorter
+            }
+        }
+        return kept
     }
 
     /**

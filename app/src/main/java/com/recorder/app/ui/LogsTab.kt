@@ -74,9 +74,22 @@ private fun GroupList(viewModel: RecorderViewModel) {
     // One index for every visible row's name, rather than a query per row per scroll.
     val summaries by viewModel.summaries.collectAsState()
     val state = rememberSharedListState("logs")
+    var pendingDelete by remember { mutableStateOf<GroupRef?>(null) }
 
     fun topicOf(group: GroupRef): String? =
         summaries[viewModel.spanKey(group.fromTs, group.toTs)]?.title
+
+    pendingDelete?.let { group ->
+        ConfirmGroupDelete(
+            viewModel = viewModel,
+            group = group,
+            onConfirm = {
+                pendingDelete = null
+                viewModel.deleteGroup(group)
+            },
+            onDismiss = { pendingDelete = null },
+        )
+    }
 
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = if (compact) 0.dp else 12.dp), state = state) {
         item {
@@ -113,11 +126,17 @@ private fun GroupList(viewModel: RecorderViewModel) {
         // taps than it saves.
         if (hours.isNotEmpty()) {
             item { SectionLabel("Last 24 hours") }
+            // Said rather than left to be discovered. A long-press that deletes an hour is not
+            // a gesture anyone tries on the off-chance.
+            item { Hint("Long-press any group to delete that whole stretch.") }
             items(hours, key = { "h${it.bucket}" }) { hour ->
                 val ref = GroupRef.hour(hour.firstTs)
-                GroupRow(ref.title(), "${hour.count} lines", topic = topicOf(ref)) {
-                    viewModel.openGroup(ref)
-                }
+                GroupRow(
+                    ref.title(),
+                    "${hour.count} lines",
+                    topic = topicOf(ref),
+                    onDelete = { pendingDelete = ref },
+                ) { viewModel.openGroup(ref) }
             }
         }
 
@@ -133,6 +152,7 @@ private fun GroupList(viewModel: RecorderViewModel) {
                         detail = "${month.days.size} day(s) · ${month.lineCount} lines",
                         chevron = if (expanded) "−" else "+",
                         topic = topicOf(GroupRef.month(month.monthKey)),
+                        onDelete = { pendingDelete = GroupRef.month(month.monthKey) },
                     ) {
                         openMonth = if (expanded) null else month.monthKey
                         viewModel.openDay(null)
@@ -151,6 +171,7 @@ private fun GroupList(viewModel: RecorderViewModel) {
                             indent = 1,
                             chevron = if (dayOpen) "−" else "+",
                             topic = topicOf(GroupRef.day(day.dayKey)),
+                            onDelete = { pendingDelete = GroupRef.day(day.dayKey) },
                         ) { viewModel.openDay(day.dayKey) }
                     }
                     if (!dayOpen) return@forEach
@@ -166,24 +187,34 @@ private fun GroupList(viewModel: RecorderViewModel) {
                     }
                     items(openDayHours, key = { "dh${day.dayKey}-${it.bucket}" }) { hour ->
                         val ref = GroupRef.hour(hour.firstTs)
-                        GroupRow(ref.title(), "${hour.count} lines", indent = 2, topic = topicOf(ref)) {
-                            viewModel.openGroup(ref)
-                        }
+                        GroupRow(
+                            ref.title(),
+                            "${hour.count} lines",
+                            indent = 2,
+                            topic = topicOf(ref),
+                            onDelete = { pendingDelete = ref },
+                        ) { viewModel.openGroup(ref) }
                     }
                     // Whole day at once, for summarising or exporting it.
                     item(key = "da${day.dayKey}") {
-                        GroupRow("The whole day", "${day.count} lines", indent = 2) {
-                            viewModel.openGroup(GroupRef.day(day.dayKey))
-                        }
+                        GroupRow(
+                            "The whole day",
+                            "${day.count} lines",
+                            indent = 2,
+                            onDelete = { pendingDelete = GroupRef.day(day.dayKey) },
+                        ) { viewModel.openGroup(GroupRef.day(day.dayKey)) }
                     }
                 }
 
                 // The month as one group: the widest zoom-out, where the days' topics roll
                 // into what the month was about.
                 item(key = "ma${month.monthKey}") {
-                    GroupRow("The whole month", "${month.lineCount} lines", indent = 1) {
-                        viewModel.openGroup(GroupRef.month(month.monthKey))
-                    }
+                    GroupRow(
+                        "The whole month",
+                        "${month.lineCount} lines",
+                        indent = 1,
+                        onDelete = { pendingDelete = GroupRef.month(month.monthKey) },
+                    ) { viewModel.openGroup(GroupRef.month(month.monthKey)) }
                 }
             }
         }
@@ -302,6 +333,7 @@ private fun monthTitle(monthKey: Int): String {
  * list of topics you can scan. It is a second line rather than squeezed onto the first,
  * because the four-inch screen has room for two short lines and not for one long one.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GroupRow(
     title: String,
@@ -309,14 +341,22 @@ private fun GroupRow(
     indent: Int = 0,
     chevron: String? = null,
     topic: String? = null,
+    onDelete: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val compact = LocalCompact.current
     val pad = (indent * if (compact) 10 else 16).dp
     val named = topic?.takeIf { it.isNotBlank() }
+    // Long-press a row to throw that whole stretch away. The same gesture as selecting a line,
+    // on the thing that represents a stretch of time, which is the unit people want gone.
+    val press = if (onDelete == null) {
+        Modifier.clickable(onClick = onClick)
+    } else {
+        Modifier.combinedClickable(onClick = onClick, onLongClick = onDelete)
+    }
     if (compact) {
         Column(
-            Modifier.fillMaxWidth().clickable(onClick = onClick)
+            Modifier.fillMaxWidth().then(press)
                 .padding(start = pad, top = 8.dp, bottom = 8.dp),
         ) {
             Row {
@@ -330,8 +370,7 @@ private fun GroupRow(
         }
     } else {
         Card(
-            Modifier.fillMaxWidth().padding(start = pad, top = 3.dp, bottom = 3.dp)
-                .clickable(onClick = onClick),
+            Modifier.fillMaxWidth().padding(start = pad, top = 3.dp, bottom = 3.dp).then(press),
         ) {
             Column(Modifier.padding(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -359,6 +398,19 @@ private fun GroupRow(
 @Composable
 private fun GroupDetail(viewModel: RecorderViewModel, group: GroupRef) {
     val compact = LocalCompact.current
+    var confirmGroupDelete by remember { mutableStateOf(false) }
+
+    if (confirmGroupDelete) {
+        ConfirmGroupDelete(
+            viewModel = viewModel,
+            group = group,
+            onConfirm = {
+                confirmGroupDelete = false
+                viewModel.deleteGroup(group)
+            },
+            onDismiss = { confirmGroupDelete = false },
+        )
+    }
 
     Column(Modifier.fillMaxSize().padding(horizontal = if (compact) 0.dp else 12.dp)) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
@@ -367,6 +419,9 @@ private fun GroupDetail(viewModel: RecorderViewModel, group: GroupRef) {
             TextButton(onClick = { viewModel.recorrect(group) }) { Text("Correct") }
             if (viewModel.canSummarise(group)) {
                 TextButton(onClick = { viewModel.summarise(group) }) { Text("Summarise") }
+            }
+            TextButton(onClick = { confirmGroupDelete = true }) {
+                Text("Delete all", color = MaterialTheme.colorScheme.error)
             }
         }
         Text(
@@ -603,4 +658,61 @@ private fun GroupTopic(viewModel: RecorderViewModel, group: GroupRef) {
             )
         }
     }
+}
+
+
+/** A one-line note in the list, for a gesture that would otherwise never be found. */
+@Composable
+private fun Hint(text: String) {
+    val compact = LocalCompact.current
+    Text(
+        text,
+        color = if (compact) CoverColors.faint else MaterialTheme.colorScheme.outline,
+        fontSize = if (compact) 11.sp else 12.sp,
+        modifier = Modifier.padding(bottom = 4.dp),
+    )
+}
+
+/**
+ * The confirmation for throwing a whole stretch of recording away.
+ *
+ * It counts the lines first and says the number. "Delete this hour?" is not enough information
+ * to answer: an hour with four lines in it and an hour with four hundred are different decisions,
+ * and the second one is most of an afternoon.
+ */
+@Composable
+private fun ConfirmGroupDelete(
+    viewModel: RecorderViewModel,
+    group: GroupRef,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val count by androidx.compose.runtime.produceState<Int?>(null, group.id) {
+        value = viewModel.groupSize(group)
+    }
+    val lines = count
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete ${group.title()}?") },
+        text = {
+            Text(
+                when (lines) {
+                    null -> "Counting what is in it…"
+                    0 -> "There is nothing recorded in this group."
+                    1 -> "One line, and any correction, flag or summary belonging to it, removed " +
+                        "for good. Undo is offered for a moment afterwards."
+                    else -> "All $lines lines, and any corrections, flags and summaries " +
+                        "belonging to them, removed for good. Undo is offered for a moment " +
+                        "afterwards."
+                },
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm, enabled = lines != null && lines > 0) {
+                Text("Delete", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Keep") } },
+    )
 }

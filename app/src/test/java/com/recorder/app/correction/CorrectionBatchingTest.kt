@@ -68,7 +68,15 @@ class CorrectionBatchingTest {
     }
 
     @Test
-    fun `the declared ceiling is the one this release was specified with`() {
-        assertEquals(1_200, CorrectionRunner.MAX_INPUT_TOKENS)
+    fun `the input ceiling leaves the native context room for history and an answer`() {
+        // The backend's context is 8192 tokens and it keeps up to MAX_TURNS_PER_LOAD turns of
+        // history, so a prompt may be at most a share of it. This is the number that, set
+        // wrong, made summarising hang: a prompt larger than the context is not an error, it
+        // is a model reading a truncated prompt and answering badly with nothing saying why.
+        assertEquals(2_400, CorrectionRunner.MAX_INPUT_TOKENS)
+        assertTrue(
+            "three turns of prompt plus answer must fit in 8192",
+            3 * (CorrectionRunner.MAX_INPUT_TOKENS + 160) <= 8_192,
+        )
     }
 }

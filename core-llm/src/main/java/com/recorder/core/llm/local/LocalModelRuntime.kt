@@ -27,6 +27,11 @@ interface LocalLlm : Closeable {
         deadlineMs: Long = 60_000,
         /** Which job asked, for the progress bar and the self-diagnostic report. */
         label: String = "pass",
+        /**
+         * Forces an empty context before this call. The backend keeps history and never clears
+         * it, so a task that must not see the previous task's text has to say so.
+         */
+        freshContext: Boolean = false,
     ): String
 
     /**

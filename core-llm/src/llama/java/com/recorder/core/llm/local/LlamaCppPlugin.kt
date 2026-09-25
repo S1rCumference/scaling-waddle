@@ -77,12 +77,16 @@ class LlamaCppEngine(
         maxTokens: Int,
         deadlineMs: Long,
         label: String,
+        freshContext: Boolean,
     ): String =
         turnLock.withLock {
             RunningTasks.track("llm-generate", "Thinking · $label") {
                 val wanted = systemPrompt?.takeIf { it.isNotBlank() }
                 val why = when {
                     !dirty -> null
+                    // A summary of one hour must not be written with the previous hour still
+                    // in the context; the model blends them and names the wrong thing.
+                    freshContext -> "this task must not see the last one"
                     wanted != null && wanted != residentSystemPrompt -> "the task changed"
                     turnsSinceLoad >= MAX_TURNS_PER_LOAD ->
                         "$turnsSinceLoad turns of history would crowd the context"
@@ -94,7 +98,7 @@ class LlamaCppEngine(
                 dirty = true
                 turnsSinceLoad++
                 if (wanted != null && wanted != residentSystemPrompt) {
-                    engine.setSystemPrompt(withNoThink(wanted))
+                    engine.setSystemPrompt(wanted)
                     residentSystemPrompt = wanted
                 }
 
@@ -112,17 +116,18 @@ class LlamaCppEngine(
                 // generation, and it unwinds as a cancellation, which is the one path the
                 // wrapper puts back to ModelReady instead of leaving the engine in Error —
                 // so a capped pass costs nothing on the next turn.
-                engine.sendUserPrompt(prompt + NO_THINK, maxTokens)
+                engine.sendUserPrompt(prompt, maxTokens)
                     .takeWhile { chunk ->
                         out.append(chunk)
                         tokens++
                         stoppedBy = when {
                             tokens >= maxTokens -> "the ${maxTokens}-token ceiling"
                             System.currentTimeMillis() > deadline -> "the ${deadlineMs / 1000}s deadline"
-                            // Still inside a reasoning block this far in means /no_think was
-                            // ignored, and everything after it is thinking too.
+                            // A reasoning model would spend the whole budget thinking. Gemma
+                            // 3 has no reasoning mode, which is most of why it was chosen, but
+                            // the check stays: it costs nothing and the next model might.
                             tokens % THINK_CHECK_EVERY == 0 && out.isStillThinking() ->
-                                "an unclosed <think> block — /no_think was ignored"
+                                "an unclosed <think> block"
 
                             else -> null
                         }
@@ -173,17 +178,6 @@ class LlamaCppEngine(
     }
 
     /**
-     * Qwen 3 reasons in a <think> block before answering unless told not to, and on a phone
-     * that spends the whole budget on reasoning nobody reads — 1151 tokens and two minutes
-     * to tidy twenty short lines. The switch now goes on the system prompt as well as the
-     * user turn, because one of the two is evidently not enough, and the token ceiling
-     * above is there for when neither is.
-     *
-     * Harmless to models that do not know it: it reads as a stray token in the prompt.
-     */
-    private fun withNoThink(systemPrompt: String): String = systemPrompt.trimEnd() + NO_THINK
-
-    /**
      * The wrapper ships its own benchmark, which is why this project does not hand-roll one:
      * pp is prompt processing, tg is token generation, pl is parallel sequences, nr repeats.
      */
@@ -218,21 +212,16 @@ private const val TOKEN_REPORT_EVERY = 8
 /**
  * Turns to run under one load before starting again.
  *
- * The native context is 8192 tokens and the wrapper never clears it. A correction window is
- * roughly 400 tokens in and 400 out, so six turns sits comfortably inside that with room
- * for a long one, and a seventh starts fresh rather than risking a silent overflow.
+ * The native context is 8192 tokens and the wrapper never clears it, so this is the guard
+ * against a silent overflow — and an overflowed context is not an error, it is worse answers
+ * with no sign of why. A correction window is now up to about 1500 tokens in and 160 out, so
+ * three turns sits inside 8192 with room for a long one and a fourth starts fresh.
+ *
+ * This was six when a window was 400 tokens in. It came down with the window size going up:
+ * reading more transcript per call is what makes the pass fast, and the arithmetic has to
+ * follow it rather than stay at a number chosen for the old shape.
  */
-private const val MAX_TURNS_PER_LOAD = 6
-
-/** Qwen 3's documented switch for answering without a reasoning block. */
-private const val NO_THINK = " /no_think"
-
-/**
- * Tokens to allow before concluding the reasoning block is never going to close. A model
- * that is asked not to think and thinks anyway has already lost the budget; this catches it
- * in a couple of seconds rather than a couple of minutes.
- */
-private const val THINKING_PATIENCE = 64
+private const val MAX_TURNS_PER_LOAD = 3
 
 /** Scanning the buffer on every token would be quadratic; every sixteenth is plenty. */
 private const val THINK_CHECK_EVERY = 16

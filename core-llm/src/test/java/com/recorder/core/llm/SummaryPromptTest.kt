@@ -138,13 +138,4 @@ class SummaryPromptTest {
         assertTrue(SummaryPrompt.SYSTEM.contains(SummaryPrompt.TITLE_MARK))
         assertTrue(SummaryPrompt.SYSTEM.contains(SummaryPrompt.BODY_MARK))
     }
-
-    @Test
-    fun `a summary budget does not grow with the span`() {
-        assertEquals(
-            TokenBudget.forSummary("hour").maxTokens,
-            TokenBudget.forSummary("month").maxTokens,
-        )
-        assertEquals(TokenBudget.SUMMARY_MAX_TOKENS, TokenBudget.forSummary("day").maxTokens)
-    }
 }

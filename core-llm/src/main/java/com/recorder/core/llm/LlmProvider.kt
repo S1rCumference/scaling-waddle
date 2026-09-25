@@ -33,54 +33,62 @@ data class TokenBudget(
     val deadlineMs: Long,
     /** Which job this is, for the progress bar and the self-diagnostic report. */
     val label: String = "pass",
+    /**
+     * Whether this call must start from an empty context.
+     *
+     * The backend keeps chat history in its native context and never clears it, so
+     * consecutive calls see each other. For correction that is useful: consecutive windows are
+     * neighbouring minutes of the same conversation. For a summary it is actively wrong — hour
+     * two would be summarised with hour one still in the context, and the model blends them —
+     * so every summary asks for a reload.
+     */
+    val freshContext: Boolean = false,
 ) {
     companion object {
-        /** The output ceiling for every correction call, whatever the batch. */
-        const val CORRECTION_MAX_TOKENS = 256
+        /**
+         * The output ceiling for a correction call.
+         *
+         * A correction produces a short list of `wrong > right` substitutions, so this is a
+         * ceiling on the number of mistakes reported, not on the length of the transcript
+         * read. At roughly 8 tokens a second on this phone that is about twenty seconds in the
+         * worst case, against eight and a half minutes for the rewrite-every-line design it
+         * replaced.
+         */
+        const val CORRECTION_MAX_TOKENS = 160
 
-        /** The wall-clock ceiling for one batch. */
-        const val CORRECTION_DEADLINE_MS = 45_000L
+        /** The wall-clock ceiling for one correction call. */
+        const val CORRECTION_DEADLINE_MS = 40_000L
 
         /**
-         * Correcting n lines produces about n lines back. The ceiling is the smaller of what
-         * the lines need and what a batch is ever allowed, so a large batch cannot buy itself
-         * a larger budget.
+         * One correction call. Fixed rather than scaled by batch size: the answer is a list of
+         * mistakes, and a longer stretch of transcript does not contain proportionally more of
+         * them — it just gives the model more to read, which costs prefill, not generation.
          */
-        fun forLines(lines: Int): TokenBudget = TokenBudget(
-            maxTokens = (lines * TOKENS_PER_LINE + 64).coerceIn(128, CORRECTION_MAX_TOKENS),
+        fun forFixes(): TokenBudget = TokenBudget(
+            maxTokens = CORRECTION_MAX_TOKENS,
             deadlineMs = CORRECTION_DEADLINE_MS,
-            label = "correction draft",
-        )
-
-        /** Repairing only the marked spans is a fraction of the work of a full pass. */
-        fun forRepair(spans: Int): TokenBudget = TokenBudget(
-            maxTokens = (spans * TOKENS_PER_LINE + 48).coerceIn(96, CORRECTION_MAX_TOKENS),
-            deadlineMs = CORRECTION_DEADLINE_MS,
-            label = "repair",
+            label = "correction",
         )
 
         /**
          * A group summary: a name and two or three sentences, so the ceiling is small and
-         * fixed. It does not scale with the size of the group — a month is not allowed a
-         * longer answer than an hour, because the point of the roll-up is that it stays
-         * readable as the span grows.
+         * fixed. It does not scale with the span — a month is not allowed a longer answer than
+         * an hour, because the point of the roll-up is that it stays readable as the span grows.
          */
-        const val SUMMARY_MAX_TOKENS = 220
+        const val SUMMARY_MAX_TOKENS = 200
 
         /**
-         * Longer than a correction batch. A summary is one call per group rather than one of
-         * many, and a model that has just been loaded pays for the first tokens.
+         * Longer than a correction call. A summary pays for a reload (it demands a fresh
+         * context) and for reading its whole source before it writes anything.
          */
-        const val SUMMARY_DEADLINE_MS = 75_000L
+        const val SUMMARY_DEADLINE_MS = 90_000L
 
         fun forSummary(label: String): TokenBudget = TokenBudget(
             maxTokens = SUMMARY_MAX_TOKENS,
             deadlineMs = SUMMARY_DEADLINE_MS,
             label = "summary of one $label",
+            freshContext = true,
         )
-
-        /** A transcript line is short; 40 tokens covers a long one with room to spare. */
-        private const val TOKENS_PER_LINE = 40
     }
 }
 
