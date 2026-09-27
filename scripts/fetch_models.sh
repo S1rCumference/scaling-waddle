@@ -8,9 +8,10 @@
 #   ./scripts/fetch_models.sh --vad            Silero VAD (small, always worth having)
 #   ./scripts/fetch_models.sh --asr            Parakeet-TDT INT8 for sherpa-onnx
 #   ./scripts/fetch_models.sh --sherpa         sherpa-onnx Android AAR into core-asr/libs
-#   ./scripts/fetch_models.sh --llama          llama.cpp Android AAR into core-llm/libs
-#   ./scripts/fetch_models.sh --llm <file.gguf>  push a GGUF you already downloaded
 #   ./scripts/fetch_models.sh --all
+#
+# There is no --llama or --llm any more. The on-device language model is gone: summaries come
+# from a hosted endpoint whose address and key are settings, so there is nothing to push.
 #
 # URLs are overridable, because release filenames move:
 #   SILERO_URL=... SHERPA_AAR_URL=... PARAKEET_URL=... ./scripts/fetch_models.sh --all
@@ -104,29 +105,6 @@ do_asr() {
   push_private "$record" "models/asr/.$ASR_MODEL_ID.install"
 }
 
-do_llama() {
-  echo "== llama.cpp Android AAR =="
-  cat <<'NOTE'
-  CI already builds this and bundles it into the released APK, so you normally need
-  nothing here. To build it locally (needs the Android SDK, NDK and CMake):
-
-    ./scripts/ci/prepare_natives.sh
-
-  That fetches the pinned sherpa-onnx AAR and builds llama.cpp's Android library
-  (examples/llama.android, module :lib) at the pinned commit into core-llm/libs/.
-NOTE
-}
-
-do_llm() {
-  local gguf="$1"
-  [ -f "$gguf" ] || die "no such file: $gguf"
-  echo "== GGUF: $(basename "$gguf") =="
-  echo "  the app looks for these exact names, largest first:"
-  echo "    phi-4-mini-q4.gguf, qwen3-1.7b-q4.gguf, gemma-3-1b-q4.gguf   (small tier)"
-  echo "    gemma-3-4b-q4.gguf (12GB), qwen3-8b-q4.gguf (16GB+)          (heavy tier)"
-  push_private "$gguf" "models/llm/$(basename "$gguf")"
-}
-
 [ $# -gt 0 ] || { grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -20; exit 1; }
 
 while [ $# -gt 0 ]; do
@@ -134,9 +112,7 @@ while [ $# -gt 0 ]; do
     --vad) do_vad; shift ;;
     --asr) do_asr; shift ;;
     --sherpa) do_sherpa; shift ;;
-    --llama) do_llama; shift ;;
-    --llm) shift; [ $# -gt 0 ] || die "--llm needs a path to a .gguf"; do_llm "$1"; shift ;;
-    --all) do_sherpa; do_vad; do_asr; do_llama; shift ;;
+    --all) do_sherpa; do_vad; do_asr; shift ;;
     *) die "unknown option: $1" ;;
   esac
 done
