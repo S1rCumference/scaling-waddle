@@ -150,7 +150,7 @@ class ExportFormatterTest {
     @Test
     fun `a multi-day export spans both dates in its name`() {
         val later = line(2, "next day").let { l ->
-            LineView(l.segment.copy(startTs = l.segment.startTs + 2 * ExportQuery.DAY_MS), null)
+            LineView(l.segment.copy(startTs = l.segment.startTs + 2 * ExportQuery.DAY_MS))
         }
         val name = ExportFormatter.fileName(lines + later, query(), zone)
         assertEquals("recorder_2026-09-23_to_2026-09-25.md", name)
