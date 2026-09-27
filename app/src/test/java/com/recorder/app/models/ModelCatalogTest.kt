@@ -105,8 +105,16 @@ class ModelCatalogTest {
     }
 
     @Test
-    fun `a missing digest parses as null rather than an empty string`() {
-        assertTrue(shipped.any { it.sha256 == null })
+    fun `every shipped model carries a real digest`() {
+        // This used to assert the opposite: that a missing digest parses as null rather than an
+        // empty string, because the GGUF language models shipped without one — Hugging Face
+        // stored them as LFS objects whose hash was not reachable when the manifest was written.
+        // Those entries are gone, so every model left is digest-verified and the installer checks
+        // it. A null here now would be a regression, not a documented trade.
+        shipped.forEach { entry ->
+            assertEquals("${entry.id} must be hash-verified", true, entry.hashVerified)
+            assertEquals("${entry.id} must have a digest", 64, entry.sha256?.length)
+        }
         assertFalse(shipped.any { it.sha256?.isBlank() == true })
     }
 

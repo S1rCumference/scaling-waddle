@@ -54,7 +54,9 @@ class ExportFormatterTest {
     fun `markdown has a title, a provenance line, a day heading and timestamped bullets`() {
         val md = render(query())
         assertTrue(md.startsWith("# Tue 23 Sep"))
-        assertTrue("names the model", "Gemma 3 1B Instruct (Q4_K_M)" in md)
+        // The provenance line used to name the model that corrected the text. There is no
+        // correction pass, so it says what the lines are instead.
+        assertTrue("says what the lines are", "as transcribed on the device" in md)
         assertTrue("## Wednesday 23 September 2026" in md)
         assertTrue("- **14:02:00** go through my content" in md)
         assertTrue("- **14:05:00** see you tomorrow" in md)
