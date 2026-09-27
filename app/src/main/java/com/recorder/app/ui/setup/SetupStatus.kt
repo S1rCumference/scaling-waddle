@@ -106,7 +106,7 @@ object SetupStatus {
         label = "Recording running",
         ok = RecordingService.state.value == RecordingService.RecorderState.RECORDING,
         detail = "The recorder is listening right now.",
-        fix = { RecordingService.start(it) },
+        fix = { RecordingService.enableAndStart(it) },
         fixLabel = "Start",
     )
 

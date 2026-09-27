@@ -547,7 +547,9 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     fun leaveSafeMode() {
         val context = getApplication<Application>()
         StartupGuard.clearSafeMode(context)
-        RecordingService.start(context)
+        // Through the setting, like every other deliberate start: leaving safe mode is the user
+        // asking for the recorder back, and the service now refuses a start the setting denies.
+        RecordingService.enableAndStart(context)
         _status.value = "Starting normally"
     }
 
@@ -746,10 +748,38 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         _status.value = "Queued. Progress is in the notification and in Settings → Models."
     }
 
+    /**
+     * The one way recording is switched on or off. The setting is stored first, then acted on.
+     *
+     * The order matters and was wrong: the write was launched into a coroutine while start() was
+     * called immediately, so the service could read the old value and refuse — or, switching on,
+     * start before the store said it should be running. Recording is now stopped before the
+     * write for the off case, so the microphone goes the instant the button is pressed rather
+     * than after a round trip to disk.
+     */
     fun setRecording(enabled: Boolean) {
         val context = getApplication<Application>()
-        viewModelScope.launch { settings.setRecordingEnabled(enabled) }
-        if (enabled) RecordingService.start(context) else RecordingService.stop(context)
+        if (!enabled) RecordingService.stop(context)
+        viewModelScope.launch {
+            settings.setRecordingEnabled(enabled)
+            if (enabled) RecordingService.start(context)
+        }
+    }
+
+    /**
+     * Starts recording if, and only if, the user wants it running — what opening either screen
+     * should do.
+     *
+     * Opening the app used to start recording unconditionally, which is why Stop did not stick:
+     * fold the phone, or come back to the app, and the activity was recreated and turned the
+     * microphone straight back on. Both screens call this now, so they behave identically.
+     */
+    fun resumeRecordingIfWanted() {
+        viewModelScope.launch {
+            if (!settings.recordingEnabled.first()) return@launch
+            if (RecordingService.state.value == RecordingService.RecorderState.RECORDING) return@launch
+            RecordingService.start(getApplication())
+        }
     }
 
     // --- Microphone sensitivity -----------------------------------------------------------

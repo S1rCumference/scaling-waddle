@@ -139,7 +139,7 @@ private fun PermissionsStep() {
     ) { result ->
         micGranted = result[Manifest.permission.RECORD_AUDIO] ?: micGranted
         notifGranted = result[Manifest.permission.POST_NOTIFICATIONS] ?: notifGranted
-        if (micGranted) RecordingService.start(context)
+        if (micGranted) RecordingService.enableAndStart(context)
     }
 
     // If another installed Recorder actually has the microphone, that shows up honestly once

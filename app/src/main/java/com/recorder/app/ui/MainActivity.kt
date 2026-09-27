@@ -17,7 +17,6 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
 import com.recorder.app.StartupGuard
-import com.recorder.app.service.RecordingService
 import com.recorder.app.ui.setup.SetupViewModel
 import com.recorder.app.ui.setup.SetupWizard
 
@@ -89,15 +88,20 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Starts recording. If another installed version of Recorder actually has the microphone,
-     * that shows up honestly afterward — [com.recorder.app.ui.RecorderApp]'s silencing banner
-     * reacts to this app's own capture actually going silent — rather than being guessed at
-     * beforehand, which could not be done reliably (see [com.recorder.app.service.MicConflict]).
+     * Starts recording *if the user wants it running*, which is the whole of the fix.
+     *
+     * This used to call start() unconditionally, so every time the screen came up — opening the
+     * app, unfolding the phone, the activity being recreated — the microphone came back on a few
+     * seconds after Stop had been pressed. Stop wrote the setting; nothing read it.
+     *
+     * If another installed version of Recorder actually has the microphone, that shows up
+     * honestly afterward — [com.recorder.app.ui.RecorderApp]'s silencing banner reacts to this
+     * app's own capture going silent — rather than being guessed at beforehand, which could not
+     * be done reliably (see [com.recorder.app.service.MicConflict]).
      */
     private fun startRecording() {
         if (StartupGuard.safeMode) return
-        if (RecordingService.state.value == RecordingService.RecorderState.RECORDING) return
-        RecordingService.start(this)
+        viewModel.resumeRecordingIfWanted()
     }
 
     private companion object {

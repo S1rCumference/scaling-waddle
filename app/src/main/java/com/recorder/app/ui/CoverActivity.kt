@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.recorder.app.StartupGuard
 
 /**
  * The cover-screen entry point, launched onto the outer display when the phone is closed.
@@ -30,6 +31,11 @@ class CoverActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The same reconcile the inner screen does, so the two screens behave identically: pick
+        // recording back up if the user wants it and it is not running, and otherwise leave it
+        // alone. The cover screen used to do neither, while the inner screen started
+        // unconditionally — so whether Stop held depended on which screen you were looking at.
+        if (!StartupGuard.safeMode) viewModel.resumeRecordingIfWanted()
         setContent {
             val setupComplete by viewModel.setupComplete.collectAsState()
             if (setupComplete == false) {

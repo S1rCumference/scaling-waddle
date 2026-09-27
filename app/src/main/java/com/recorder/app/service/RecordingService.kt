@@ -43,6 +43,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The always-on recorder.
@@ -89,6 +92,24 @@ class RecordingService : Service() {
             return
         }
 
+        // The one authority on whether the recorder should be running. Checked here rather than
+        // only at the call sites, because "Stop" has to mean stopped however the start arrived —
+        // and it did not. Opening the app called start() unconditionally, so every time the
+        // screen came up, or the phone was folded and the activity recreated, recording came
+        // back on a few seconds after being switched off.
+        //
+        // A blocking read, deliberately: this decides whether the service exists at all, so
+        // doing it asynchronously would mean recording for a moment before stopping. It is one
+        // preference read at service creation, bounded, and it falls back to running rather than
+        // refusing if the store is slow — failing towards "keep recording" is the right way for
+        // this app to fail.
+        if (!recordingWanted()) {
+            Diagnostics.i(TAG, "not starting: recording is switched off")
+            _state.value = RecorderState.STOPPED
+            stopSelf()
+            return
+        }
+
         Diagnostics.i(TAG, "recording service starting")
         startPipeline()
 
@@ -97,11 +118,26 @@ class RecordingService : Service() {
         }
     }
 
+    /**
+     * Whether the user wants the recorder running, read from the one stored setting.
+     *
+     * Falls back to true on a timeout so a slow store cannot silently stop the recorder; the
+     * timeout is generous enough that it only fires if something is badly wrong.
+     */
+    private fun recordingWanted(): Boolean = runBlocking {
+        withTimeoutOrNull(SETTING_READ_TIMEOUT_MS) {
+            ServiceLocator.settings.recordingEnabled.first()
+        } ?: true
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Reaching here at all means the start was permitted, so clear any resume prompt.
         ResumeNotifier.clear(this)
         if (intent?.action == ACTION_MODELS_CHANGED) adoptNewModels()
-        return START_STICKY
+        // Sticky only when actually recording. A service that refused to start — switched off, or
+        // without microphone permission — must not be recreated by the system, or it comes back
+        // recording and that is the same bug by another route.
+        return if (_state.value == RecorderState.RECORDING) START_STICKY else START_NOT_STICKY
     }
 
     /**
@@ -410,6 +446,9 @@ class RecordingService : Service() {
          */
         val micSilenced: StateFlow<Boolean> = _micSilenced.asStateFlow()
 
+        /** Long enough that only a badly broken preference store hits it. */
+        private const val SETTING_READ_TIMEOUT_MS = 2_000L
+
         const val ACTION_RESUME = "com.recorder.app.action.RESUME"
 
         /** Tells a running recorder that a model has arrived since it started. */
@@ -461,6 +500,21 @@ class RecordingService : Service() {
                 else -> Diagnostics.w(TAG, "could not start recording", error)
             }
             _state.value = RecorderState.STOPPED
+        }
+
+        /**
+         * Switches recording on and starts it, for the places where the user has just asked for
+         * it: finishing setup, the "Start" fix in the setup checklist, provisioning completing.
+         *
+         * Needed because the service now refuses to run when the stored setting says off. Those
+         * call sites used to start the service directly, which would silently do nothing for a
+         * user who had pressed Stop and then went looking for the Start button.
+         */
+        fun enableAndStart(context: Context) {
+            ServiceLocator.appScope.launch {
+                ServiceLocator.settings.setRecordingEnabled(true)
+                withContext(Dispatchers.Main) { start(context) }
+            }
         }
 
         fun stop(context: Context) {

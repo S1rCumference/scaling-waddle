@@ -31,7 +31,7 @@ class RecorderDeviceAdminReceiver : DeviceAdminReceiver() {
             protectSelf(true)
             deferSystemUpdates(true)
         }
-        RecordingService.start(context)
+        RecordingService.enableAndStart(context)
     }
 
     private companion object {
