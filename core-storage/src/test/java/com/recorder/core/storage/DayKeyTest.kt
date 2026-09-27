@@ -91,3 +91,88 @@ class MonthBoundsTest {
         assertTrue(DayKey.startOf(20_260_401, utc) >= to)
     }
 }
+
+/**
+ * Week boundaries, which the month roll-up is built from.
+ *
+ * Asserted as properties rather than "weeks start on Monday", because which day a week starts on
+ * is the locale's business — Calendar's firstDayOfWeek is Monday in most of the world and Sunday
+ * in the US — and a test that hard-coded one would pass or fail on the machine, not the code.
+ */
+class WeekBoundsTest {
+
+    private val utc: TimeZone = TimeZone.getTimeZone("UTC")
+    private val day = 86_400_000L
+
+    private fun at(dayKey: Int, hour: Int = 12) =
+        DayKey.startOf(dayKey, utc) + hour * 3_600_000L
+
+    @Test
+    fun `a week is seven days long`() {
+        val ts = at(20_260_923)
+        assertEquals(7 * day, DayKey.weekEnd(ts, utc) - DayKey.weekStart(ts, utc))
+    }
+
+    @Test
+    fun `the timestamp is inside its own week`() {
+        val ts = at(20_260_923, hour = 17)
+        assertTrue(ts >= DayKey.weekStart(ts, utc))
+        assertTrue(ts < DayKey.weekEnd(ts, utc))
+    }
+
+    @Test
+    fun `a week starts at midnight`() {
+        val start = DayKey.weekStart(at(20_260_923), utc)
+        val c = java.util.Calendar.getInstance(utc).apply { timeInMillis = start }
+        assertEquals(0, c.get(java.util.Calendar.HOUR_OF_DAY))
+        assertEquals(0, c.get(java.util.Calendar.MINUTE))
+        assertEquals(0, c.get(java.util.Calendar.SECOND))
+        assertEquals(0, c.get(java.util.Calendar.MILLISECOND))
+    }
+
+    @Test
+    fun `a week starts on whatever day this locale starts weeks on`() {
+        val start = DayKey.weekStart(at(20_260_923), utc)
+        val c = java.util.Calendar.getInstance(utc).apply { timeInMillis = start }
+        assertEquals(c.firstDayOfWeek, c.get(java.util.Calendar.DAY_OF_WEEK))
+    }
+
+    @Test
+    fun `every day of one week agrees on where that week starts`() {
+        // The property the roll-up depends on: seven days must map to one week, or a month would
+        // be built from overlapping spans.
+        val start = DayKey.weekStart(at(20_260_923), utc)
+        val starts = (0..6).map { DayKey.weekStart(start + it * day + 3_600_000L, utc) }.distinct()
+        assertEquals(listOf(start), starts)
+    }
+
+    @Test
+    fun `the next day after a week ends belongs to the next week`() {
+        val ts = at(20_260_923)
+        val end = DayKey.weekEnd(ts, utc)
+        assertEquals(end, DayKey.weekStart(end, utc))
+    }
+
+    @Test
+    fun `it is idempotent`() {
+        val start = DayKey.weekStart(at(20_260_923), utc)
+        assertEquals(start, DayKey.weekStart(start, utc))
+    }
+
+    @Test
+    fun `a week spanning a month boundary still works`() {
+        // The case the naive DAY_OF_WEEK arithmetic got wrong: walking back past the 1st.
+        val ts = at(20_261_001, hour = 9)
+        assertTrue(ts >= DayKey.weekStart(ts, utc))
+        assertTrue(ts < DayKey.weekEnd(ts, utc))
+        assertEquals(7 * day, DayKey.weekEnd(ts, utc) - DayKey.weekStart(ts, utc))
+    }
+
+    @Test
+    fun `a week spanning a year boundary still works`() {
+        val ts = at(20_270_101, hour = 9)
+        assertTrue(ts >= DayKey.weekStart(ts, utc))
+        assertTrue(ts < DayKey.weekEnd(ts, utc))
+        assertEquals(7 * day, DayKey.weekEnd(ts, utc) - DayKey.weekStart(ts, utc))
+    }
+}
