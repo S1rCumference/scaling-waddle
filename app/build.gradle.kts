@@ -127,20 +127,13 @@ android {
             /*
              * Extract the native libraries to disk at install time.
              *
-             * This is not a size or speed preference — it is what makes the local AI models
-             * work at all. The bundled llama.cpp AAR is built with GGML_BACKEND_DL=ON and
-             * GGML_CPU_ALL_VARIANTS=ON, so its CPU kernels are *separate* shared libraries
-             * (libggml-cpu-android_armv8.2_1.so and friends) that the runtime dlopen()s at
-             * start-up by scanning ApplicationInfo.nativeLibraryDir.
-             *
-             * With the modern default (useLegacyPackaging = false) the .so files stay inside
-             * the APK and that directory is empty. System.loadLibrary still works, because
-             * the linker knows about the APK, but the directory scan finds nothing, no CPU
-             * backend is ever registered, and every single llama_model_load_from_file call
-             * fails. On the phone that surfaced as "Model runtime failed to load
-             * qwen3-1.7b-q4.gguf" for every model, at every tier, with nothing else wrong.
-             *
-             * sherpa-onnx is unaffected either way: it links its runtime into one .so.
+             * This existed because llama.cpp's CPU kernels were separate shared libraries that
+             * the runtime dlopen()d by scanning ApplicationInfo.nativeLibraryDir, and with the
+             * modern default that directory is empty — which made every model fail to load.
+             * llama.cpp is gone, and sherpa-onnx links its runtime into one .so, so this is no
+             * longer load-bearing. It is kept rather than flipped: the setting is known to work
+             * on the target phone, and changing how an app packages its native code is not a
+             * change to make in passing while removing something else.
              */
             useLegacyPackaging = true
 
@@ -160,9 +153,9 @@ android {
 
     lint {
         // Lint Vital is on by default for release builds and needs a "local lint" AAR from
-        // every dependency for cross-module analysis. AGP refuses to build one for core-asr
-        // or core-llm, which each depend directly on a local .aar file (sherpa-onnx,
-        // llama.cpp) rather than a Maven artifact, since neither ships to a repository:
+        // every dependency for cross-module analysis. AGP refuses to build one for core-asr,
+        // which depends directly on a local .aar file (sherpa-onnx) rather than a Maven
+        // artifact, since it does not ship to a repository:
         // ":core-asr:bundleReleaseLocalLintAar ... Direct local .aar file dependencies are
         // not supported when building an AAR." That failed a release build before it
         // compiled anything release-specific, over a lint pass this project doesn't

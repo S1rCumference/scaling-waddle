@@ -3,7 +3,6 @@ package com.recorder.app.ui
 import android.content.Context
 import com.recorder.core.storage.Clocks
 import com.recorder.core.storage.DayKey
-import com.recorder.core.storage.SegmentCorrection
 import com.recorder.core.storage.TranscriptSegment
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -11,14 +10,7 @@ import kotlinx.coroutines.flow.update
 
 enum class AppTab(val label: String) { LIVE("Live"), LOGS("Logs"), FLAGS("Flags"), SETTINGS("Settings") }
 
-enum class TextMode(val label: String) {
-    /** What was heard. The default: it is the only version that is certainly what was said. */
-    ORIGINAL("Original"),
-    CORRECTED("Corrected"),
-    BOTH("Both"),
-}
-
-enum class GroupKind { HOUR, DAY, MONTH, RANGE, ALL }
+enum class GroupKind { HOUR, DAY, WEEK, MONTH, RANGE, ALL }
 
 /** A stretch of transcript the Logs tab can open: an hour, a day, a range, or everything. */
 data class GroupRef(val kind: GroupKind, val fromTs: Long, val toTs: Long) {
@@ -37,6 +29,7 @@ data class GroupRef(val kind: GroupKind, val fromTs: Long, val toTs: Long) {
             DayKey.previous(DayKey.of(now)) -> "Yesterday · ${Clocks.date(fromTs)}"
             else -> Clocks.date(fromTs)
         }
+        GroupKind.WEEK -> "Week of ${Clocks.date(fromTs)}"
         GroupKind.MONTH -> Clocks.monthAndYear(fromTs)
         GroupKind.RANGE -> "${Clocks.date(fromTs)} – ${Clocks.date(toTs - 1)}"
     }
@@ -51,6 +44,10 @@ data class GroupRef(val kind: GroupKind, val fromTs: Long, val toTs: Long) {
 
         fun day(dayKey: Int): GroupRef = GroupRef(GroupKind.DAY, DayKey.startOf(dayKey), DayKey.endOf(dayKey))
 
+        /** The week containing [anyTs], starting on whatever day the locale starts weeks on. */
+        fun week(anyTs: Long): GroupRef =
+            GroupRef(GroupKind.WEEK, DayKey.weekStart(anyTs), DayKey.weekEnd(anyTs))
+
         /** [monthKey] is yyyymm, the key the Logs calendar already groups days by. */
         fun month(monthKey: Int): GroupRef =
             GroupRef(GroupKind.MONTH, DayKey.monthStart(monthKey), DayKey.monthEnd(monthKey))
@@ -62,11 +59,15 @@ data class GroupRef(val kind: GroupKind, val fromTs: Long, val toTs: Long) {
     }
 }
 
-/** One transcript line with its newest correction, if any pass has produced one. */
-data class LineView(val segment: TranscriptSegment, val correction: SegmentCorrection?) {
-    val original: String get() = segment.text
-    val corrected: String get() = correction?.text ?: segment.text
-    val changed: Boolean get() = correction != null && !correction.unchangedFrom(segment.text)
+/**
+ * One transcript line.
+ *
+ * It used to carry the newest correction beside it, and the group view had a chip row to switch
+ * between original, corrected and both. There is no correction pass any more — it was the part
+ * that never worked — so a line has one version, which is what was heard.
+ */
+data class LineView(val segment: TranscriptSegment) {
+    val text: String get() = segment.text
 }
 
 data class ScrollPos(val index: Int, val offset: Int)
@@ -88,7 +89,6 @@ object AppUiState {
     /** The last tab that was not Settings — what the inner screen shows under its settings panel. */
     val contentTab = MutableStateFlow(AppTab.LIVE)
     val openGroup = MutableStateFlow<GroupRef?>(null)
-    val textMode = MutableStateFlow(TextMode.ORIGINAL)
 
     /** Segments picked for a partial export, in the open group. */
     val selection = MutableStateFlow<Set<Long>>(emptySet())
@@ -112,7 +112,6 @@ object AppUiState {
             if (it != AppTab.SETTINGS) contentTab.value = it
         }
         openGroup.value = p.getString("group", null)?.let(GroupRef::parse)
-        p.getString("mode", null)?.let { name -> TextMode.entries.firstOrNull { it.name == name } }?.let { textMode.value = it }
     }
 
     fun selectTab(value: AppTab) {
@@ -126,12 +125,6 @@ object AppUiState {
         openGroup.value = group
         prefs?.edit()?.putString("group", group?.id)?.apply()
     }
-
-    fun setMode(mode: TextMode) {
-        textMode.value = mode
-        prefs?.edit()?.putString("mode", mode.name)?.apply()
-    }
-
 
     fun toggleSelected(id: Long) = selection.update { if (id in it) it - id else it + id }
 }

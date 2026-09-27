@@ -9,11 +9,8 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import com.recorder.app.admin.DeviceOwner
-import com.recorder.app.models.ModelCatalog
-import com.recorder.app.models.ModelRole
 import com.recorder.app.service.RecordingService
 import com.recorder.core.asr.AsrEngineFactory
-import com.recorder.core.llm.local.LocalModelRuntime
 
 /**
  * One line of the Setup status screen.
@@ -40,16 +37,12 @@ data class SetupCheck(
 object SetupStatus {
 
     fun check(context: Context): List<SetupCheck> {
-        val catalog = runCatching { ModelCatalog.load(context) }.getOrDefault(emptyList())
-        val chatModels = catalog.filter { it.role == ModelRole.SMALL_CHAT }
-
         return listOf(
             micCheck(context),
             notificationCheck(context),
             batteryCheck(context),
             recordingCheck(),
             speechModelCheck(context),
-            chatModelCheck(context, chatModels.any { it.isInstalled(context) }),
             coverScreenCheck(context),
             deviceOwnerCheck(context),
         )
@@ -121,17 +114,6 @@ object SetupStatus {
                 ?.let { "Not usable yet — $it. The app records but writes nothing down." }
                 ?: "The model is complete."
         },
-    )
-
-    private fun chatModelCheck(context: Context, anyInstalled: Boolean) = SetupCheck(
-        label = "On-device assistant",
-        ok = LocalModelRuntime.available && anyInstalled,
-        detail = LocalModelRuntime.unavailableReason
-            ?: if (anyInstalled) {
-                "Loaded on demand and unloaded when idle."
-            } else {
-                "Optional. Re-run setup to download a chat model."
-            },
     )
 
     /**

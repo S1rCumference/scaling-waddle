@@ -1,5 +1,6 @@
 package com.recorder.core.llm
 
+
 /**
  * What a group of transcript is about, in a name and a paragraph.
  *
@@ -52,15 +53,18 @@ data class GroupSummary(
  * version that fits on a phone: summarising a month from raw text would be tens of thousands
  * of lines through a 1B model, where summarising it from thirty paragraphs is one prompt.
  */
-enum class SummaryLevel(val label: String, val sourceIsSummaries: Boolean) {
+enum class SummaryLevel(val label: String, val sourceIsSummaries: Boolean, val partLabel: String) {
     /** Straight from the transcript lines. */
-    HOUR("hour", sourceIsSummaries = false),
+    HOUR("hour", sourceIsSummaries = false, partLabel = "line"),
 
     /** From the hours of that day. */
-    DAY("day", sourceIsSummaries = true),
+    DAY("day", sourceIsSummaries = true, partLabel = "hour"),
 
-    /** From the days of that month. */
-    MONTH("month", sourceIsSummaries = true),
+    /** From the days of that week. */
+    WEEK("week", sourceIsSummaries = true, partLabel = "day"),
+
+    /** From the weeks of that month, falling back to its days when the weeks have none. */
+    MONTH("month", sourceIsSummaries = true, partLabel = "week"),
 }
 
 /**
@@ -100,7 +104,7 @@ object SummaryPrompt {
         append("This is ").append(what).append(".\n\n")
         if (level.sourceIsSummaries) {
             append("Below are the summaries of each ")
-            append(if (level == SummaryLevel.DAY) "hour" else "day")
+            append(level.partLabel)
             append(" inside it. Roll them up into one, keeping the topics that recur ")
             append("and dropping the ones that were mentioned once.\n\n")
         } else {
@@ -190,4 +194,62 @@ object SummaryPrompt {
 
     /** A first line longer than this is prose, not a heading. */
     private const val HEADING_MAX_CHARS = 60
+}
+
+
+/**
+ * One turn of a chat request. All that survives of an interface that once abstracted five
+ * backends — three cloud vendors, a local server and llama.cpp — and now describes the shape
+ * every OpenAI-compatible endpoint takes.
+ */
+enum class Role { SYSTEM, USER }
+
+data class ChatMessage(val role: Role, val content: String) {
+    /** The wire name, which is lower case in every implementation of this API. */
+    val wireRole: String get() = name(role)
+
+    private fun name(role: Role) = when (role) {
+        Role.SYSTEM -> "system"
+        Role.USER -> "user"
+    }
+}
+
+/**
+ * What one summary is allowed to spend.
+ *
+ * A ceiling on the answer, not on the span: a month is not allowed a longer summary than an
+ * hour, because the point of rolling hours up into days and days into months is that the result
+ * stays readable as the span grows. Kept even though generation is no longer on this phone —
+ * an unbounded answer is now somebody's free-tier allowance rather than a flat battery, and a
+ * budget nobody enforces is not a budget.
+ */
+data class SummaryBudget(
+    val maxTokens: Int = MAX_TOKENS,
+    val timeoutMs: Long = TIMEOUT_MS,
+    val label: String = "summary",
+) {
+    companion object {
+        /** A name and two or three sentences. */
+        const val MAX_TOKENS = 200
+
+        /** A network call to a hosted model, not a phone grinding through tokens. */
+        const val TIMEOUT_MS = 45_000L
+
+        fun forLevel(level: SummaryLevel): SummaryBudget =
+            SummaryBudget(label = "summary of one ${level.label}")
+    }
+}
+
+/** What a summary attempt produced, or why it produced nothing. */
+sealed interface SummaryResult {
+    data class Ok(val summary: GroupSummary) : SummaryResult
+
+    /** The request failed in a way that retrying later might fix. [retryAfterMs] when told. */
+    data class Backoff(val reason: String, val retryAfterMs: Long?) : SummaryResult
+
+    /** The request failed in a way that retrying will not fix — a bad key, a bad model id. */
+    data class Refused(val reason: String) : SummaryResult
+
+    /** The call worked and the answer was unusable. */
+    data class Unusable(val reason: String) : SummaryResult
 }

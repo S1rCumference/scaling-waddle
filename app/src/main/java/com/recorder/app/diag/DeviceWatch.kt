@@ -1,17 +1,20 @@
 package com.recorder.app.diag
 
 import android.content.Context
+import android.os.BatteryManager
+import android.content.IntentFilter
+import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
-import com.recorder.app.correction.batteryPercent
-import com.recorder.app.correction.isCharging
 import com.recorder.core.storage.Clocks
 import com.recorder.core.storage.Diagnostics
 
 /**
  * Charging, heat and battery saver, and when each of them changed.
  *
- * Every one of the three decides whether the AI is allowed to run (see CorrectionGate), so
+ * All three used to gate whether the AI was allowed to run. Nothing gates it now — summarising
+ * is a network request, not minutes of CPU — but these are still the transitions that explain a
+ * phone that went quiet, so
  * "why did nothing get corrected last night" is usually answered by one of these having
  * moved. The recorder's heartbeat calls [noteChanges] once a minute, which is cheap — three
  * system reads — and turns a state nobody can see afterwards into a short list of
@@ -116,3 +119,24 @@ object DeviceWatch {
         }
     }
 }
+
+/**
+ * Battery state, read straight from the sticky broadcast.
+ *
+ * These lived next to the correction gate, which was the only thing that cared whether the phone
+ * was charging. That gate is gone with the local model, and the report is the last caller left —
+ * so they moved here rather than leaving a file behind to hold two functions.
+ */
+internal fun Context.isCharging(): Boolean = batteryIntent()?.let {
+    val status = it.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+    status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+} ?: false
+
+internal fun Context.batteryPercent(): Int = batteryIntent()?.let {
+    val level = it.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+    val scale = it.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+    if (level >= 0 && scale > 0) level * 100 / scale else -1
+} ?: -1
+
+private fun Context.batteryIntent(): Intent? =
+    runCatching { registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }.getOrNull()

@@ -1,6 +1,5 @@
 package com.recorder.app.models
 
-import com.recorder.core.llm.local.OnDeviceModel
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -65,23 +64,12 @@ class ModelCatalogTest {
         }
     }
 
-    /**
-     * The quiet failure this guards against: a manifest filename the app does not look for.
-     * The download succeeds, the file lands on disk, and the model stays unavailable forever
-     * with no error anywhere.
-     */
+    /** Two files and no choices: there is nothing left to pick between. */
     @Test
-    fun `the one language model is the one the app loads`() {
-        val chat = shipped.filter { it.role == ModelRole.SMALL_CHAT }.map { it.fileName }
-        assertEquals(listOf(OnDeviceModel.FILE_NAME), chat)
-    }
-
-    /** Three files and no choices: 3.0 has nothing to pick between. */
-    @Test
-    fun `the manifest is exactly voice detection, speech recognition and correction`() {
-        assertEquals(3, shipped.size)
+    fun `the manifest is exactly voice detection and speech recognition`() {
+        assertEquals(2, shipped.size)
         assertEquals(
-            listOf(ModelRole.VAD, ModelRole.ASR, ModelRole.SMALL_CHAT).sortedBy { it.name },
+            listOf(ModelRole.VAD, ModelRole.ASR).sortedBy { it.name },
             shipped.map { it.role }.sortedBy { it.name },
         )
     }

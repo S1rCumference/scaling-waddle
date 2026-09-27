@@ -36,6 +36,32 @@ object DayKey {
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
 
+    /**
+     * Local midnight at the start of the week containing [timestampMs].
+     *
+     * Which day a week starts on is the locale's business, not this file's: Calendar's
+     * firstDayOfWeek is Monday in most of the world and Sunday in the US, and a "week" that
+     * disagreed with the user's own calendar would be worse than no week at all.
+     */
+    fun weekStart(timestampMs: Long, zone: TimeZone = TimeZone.getDefault()): Long =
+        Calendar.getInstance(zone).apply {
+            timeInMillis = timestampMs
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+            // Walk back to the locale's first day rather than using DAY_OF_WEEK arithmetic,
+            // which gets the wrap-around wrong at the turn of a month.
+            while (get(Calendar.DAY_OF_WEEK) != firstDayOfWeek) add(Calendar.DAY_OF_MONTH, -1)
+        }.timeInMillis
+
+    /** Local midnight at the start of the following week (exclusive end). */
+    fun weekEnd(timestampMs: Long, zone: TimeZone = TimeZone.getDefault()): Long =
+        Calendar.getInstance(zone).apply {
+            timeInMillis = weekStart(timestampMs, zone)
+            add(Calendar.DAY_OF_MONTH, 7)
+        }.timeInMillis
+
     /** Local midnight at the first of the month [monthKey] (yyyymm). */
     fun monthStart(monthKey: Int, zone: TimeZone = TimeZone.getDefault()): Long =
         startOf(monthKey * 100 + 1, zone)

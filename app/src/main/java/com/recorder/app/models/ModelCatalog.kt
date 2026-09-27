@@ -2,7 +2,6 @@ package com.recorder.app.models
 
 import android.content.Context
 import com.recorder.core.asr.AsrModels
-import com.recorder.core.llm.local.LocalModelRuntime
 import java.io.File
 import org.json.JSONObject
 
@@ -12,9 +11,6 @@ enum class ModelRole {
 
     /** Speech recognition. Without this the app records but produces no text. */
     ASR,
-
-    /** The one language model, which corrects transcript lines and nothing else. */
-    SMALL_CHAT,
 
 }
 
@@ -50,7 +46,6 @@ data class ModelEntry(
     fun destinationDir(context: Context): File = when (role) {
         ModelRole.VAD -> AsrModels.modelDir(context)
         ModelRole.ASR -> AsrModels.asrDir(context)
-        ModelRole.SMALL_CHAT -> LocalModelRuntime.modelDir(context)
     }
 
     /**

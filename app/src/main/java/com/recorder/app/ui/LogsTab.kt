@@ -6,7 +6,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,7 +17,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -32,10 +30,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.recorder.core.storage.CorrectionPass
 import com.recorder.core.audio.SpeakerChange
 import com.recorder.core.audio.VoicePrint
 import com.recorder.core.storage.Clocks
@@ -416,7 +412,6 @@ private fun GroupDetail(viewModel: RecorderViewModel, group: GroupRef) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
             TextButton(onClick = { viewModel.openGroup(null) }) { Text("‹ All logs") }
             TextButton(onClick = { viewModel.openExport(group) }) { Text("Export") }
-            TextButton(onClick = { viewModel.recorrect(group) }) { Text("Correct") }
             if (viewModel.canSummarise(group)) {
                 TextButton(onClick = { viewModel.summarise(group) }) { Text("Summarise") }
             }
@@ -441,7 +436,6 @@ private fun GroupDetail(viewModel: RecorderViewModel, group: GroupRef) {
 private fun Lines(viewModel: RecorderViewModel, modifier: Modifier) {
     val compact = LocalCompact.current
     val lines by viewModel.groupLines.collectAsState()
-    val mode by viewModel.textMode.collectAsState()
     val selection by viewModel.selection.collectAsState()
     val group by viewModel.openGroup.collectAsState()
     val state = rememberSharedListState("group:${group?.id}")
@@ -459,36 +453,28 @@ private fun Lines(viewModel: RecorderViewModel, modifier: Modifier) {
     }
 
     Column(modifier) {
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            TextMode.entries.forEach { entry ->
-                FilterChip(selected = mode == entry, onClick = { viewModel.setTextMode(entry) }, label = { Text(entry.label) })
-            }
-            if (selection.isNotEmpty()) {
-                // A long-press selection opens the same Export screen, pre-filled with it.
+        // Only shown when something is selected. The chip row that used to live here switched
+        // between original, corrected and both; there is one version of a line now, so three
+        // chips that all showed the same text were a row of screen spent on nothing.
+        if (selection.isNotEmpty()) {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 TextButton(onClick = { viewModel.openExport(onlyIds = selection) }) {
                     Text("Export ${selection.size}")
                 }
-                // Bulk delete: the reason for selecting several lines at once is usually that
-                // a stretch of the day should not have been recorded. One confirmation,
-                // because this is the one destructive thing in the app and a mis-tap here
-                // costs lines rather than a screen.
                 TextButton(onClick = { confirmDelete = true }) {
                     Text("Delete ${selection.size}", color = MaterialTheme.colorScheme.error)
                 }
                 TextButton(onClick = viewModel::clearSelection) { Text("Clear") }
             }
         }
-        CorrectionSummary(lines)
 
         if (lines.isEmpty()) {
             EmptyState("Nothing in this group yet.")
             return@Column
         }
 
-        BoxWithConstraints(Modifier.fillMaxSize()) {
-            val sideBySide = mode == TextMode.BOTH && maxWidth >= 560.dp
-            LazyColumn(Modifier.fillMaxSize(), state = state) {
-                itemsIndexed(lines, key = { _, it -> it.segment.id }) { index, line ->
+        LazyColumn(Modifier.fillMaxSize(), state = state) {
+            itemsIndexed(lines, key = { _, it -> it.segment.id }) { index, line ->
                     val selected = line.segment.id in selection
                     // A generic divider, never a name: nothing here knows who anybody is.
                     if (index > 0 && speakerChanged(lines[index - 1].segment, line.segment)) {
@@ -504,162 +490,20 @@ private fun Lines(viewModel: RecorderViewModel, modifier: Modifier) {
                             .padding(vertical = 4.dp),
                     ) {
                         Text(
-                            Clocks.time(line.segment.startTs) + if (line.changed) "  · corrected" else "",
+                            Clocks.time(line.segment.startTs),
                             color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.outline,
                             fontSize = 11.sp,
                         )
-                        LineText(line, mode, sideBySide)
-                    }
+                    Text(
+                        line.text,
+                        color = if (compact) Color.White else MaterialTheme.colorScheme.onBackground,
+                        fontSize = 16.sp,
+                    )
                 }
             }
         }
     }
 }
-
-@Composable
-private fun LineText(line: LineView, mode: TextMode, sideBySide: Boolean) {
-    val compact = LocalCompact.current
-    val main = if (compact) Color.White else MaterialTheme.colorScheme.onBackground
-    val faded = if (compact) CoverColors.faint else MaterialTheme.colorScheme.outline
-    when (mode) {
-        TextMode.ORIGINAL -> Text(line.original, color = main, fontSize = 16.sp)
-        // Summary never reaches here — it is a different view of the group, handled before
-        // the lines are rendered at all — but it is spelled out rather than swept into an
-        // else, so the next mode added has to come back and decide.
-        TextMode.CORRECTED,
-        -> Text(line.corrected, color = main, fontSize = 16.sp)
-        TextMode.BOTH -> if (sideBySide) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(line.original, color = faded, fontSize = 15.sp, modifier = Modifier.weight(1f))
-                Text(
-                    if (line.changed) line.corrected else "—",
-                    color = main,
-                    fontSize = 15.sp,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        } else {
-            Column {
-                Text(line.corrected, color = main, fontSize = 16.sp)
-                if (line.changed) {
-                    Text("was: ${line.original}", color = faded, fontSize = 13.sp, fontStyle = FontStyle.Italic)
-                }
-            }
-        }
-    }
-}
-
-/** Which passes produced the corrected text in view — shown rather than implied. */
-@Composable
-private fun CorrectionSummary(lines: List<LineView>) {
-    if (lines.isEmpty()) return
-    val compact = LocalCompact.current
-    val corrections = lines.mapNotNull { it.correction }
-    val changed = lines.count { it.changed }
-    val text = if (corrections.isEmpty()) {
-        "Not corrected yet — showing the original."
-    } else {
-        val by = corrections.groupingBy { "${CorrectionPass.label(it.pass)} by ${it.engine}" }.eachCount()
-            .entries.sortedByDescending { it.value }.joinToString("; ") { it.key }
-        "${corrections.size} of ${lines.size} lines checked, $changed changed · $by"
-    }
-    Text(
-        text,
-        color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.outline,
-        fontSize = 12.sp,
-        modifier = Modifier.padding(vertical = 2.dp),
-    )
-}
-
-
-/**
- * The one confirmation in the app.
- *
- * Deleting is real — the lines, their corrections and their flags all go — so it asks once,
- * and says how many. Undo still exists afterwards, from the status line, but only while the
- * app is running: this is the sentence that has to be right.
- */
-@Composable
-private fun ConfirmDelete(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (count == 1) "Delete this line?" else "Delete $count lines?") },
-        text = {
-            Text(
-                "They are removed for good, along with any corrections and flags. " +
-                    "Undo is offered for a moment afterwards.",
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text("Delete", color = MaterialTheme.colorScheme.error)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Keep") } },
-    )
-}
-
-
-/**
- * What this group was about: the name, and a paragraph under it.
- *
- * The date is already the heading above, so this is the other two thirds of what was asked
- * for — the name and the context. Collapsed to the name after the first read, because on the
- * cover screen the paragraph is most of the screen and the name is what you came for.
- */
-@Composable
-private fun GroupTopic(viewModel: RecorderViewModel, group: GroupRef) {
-    val compact = LocalCompact.current
-    val summary by viewModel.openGroupSummary.collectAsState()
-    val progress by viewModel.summaryProgress.collectAsState()
-    var expanded by remember(group.id) { mutableStateOf(!compact) }
-    val current = summary
-
-    if (current == null) {
-        // Said rather than implied. A group with no summary and no explanation reads like a
-        // feature that is broken rather than one that has not run yet.
-        if (viewModel.canSummarise(group)) {
-            Text(
-                progress ?: "No summary yet — the overnight pass writes one, or press Summarise.",
-                color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.outline,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(vertical = 2.dp),
-            )
-        }
-        return
-    }
-
-    val body = current.body
-    Column(
-        Modifier.fillMaxWidth()
-            .clickable(enabled = body.isNotBlank()) { expanded = !expanded }
-            .padding(vertical = 4.dp),
-    ) {
-        if (current.title.isNotBlank()) {
-            Text(
-                current.title,
-                color = if (compact) CoverColors.live else MaterialTheme.colorScheme.primary,
-                style = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
-            )
-        }
-        if (body.isNotBlank()) {
-            Text(
-                body,
-                color = if (compact) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = if (compact) 13.sp else 15.sp,
-                maxLines = if (expanded) Int.MAX_VALUE else 2,
-            )
-        }
-        progress?.let {
-            Text(
-                it,
-                color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.outline,
-                fontSize = 11.sp,
-            )
-        }
-    }
-}
-
 
 /** A one-line note in the list, for a gesture that would otherwise never be found. */
 @Composable

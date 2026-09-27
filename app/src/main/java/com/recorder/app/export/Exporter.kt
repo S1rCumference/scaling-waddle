@@ -11,7 +11,6 @@ import com.recorder.app.ServiceLocator
 import com.recorder.app.ui.LineView
 import com.recorder.core.storage.ExportDefaults
 import com.recorder.core.storage.ExportDestinations
-import com.recorder.core.storage.latestBySegment
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -26,24 +25,17 @@ object Exporter {
 
     const val FOLDER = "Recorder"
 
-    /** Lines for a time range, each with its newest correction. */
+    /** Lines for a time range. One version of each: what was transcribed. */
     suspend fun rawLinesInRange(fromTs: Long, toTs: Long): List<LineView> = withContext(Dispatchers.IO) {
-        val db = ServiceLocator.database
-        val segments = db.transcripts().inRange(fromTs, toTs)
-        attachCorrections(segments.map { it.id }).let { latest -> segments.map { LineView(it, latest[it.id]) } }
+        ServiceLocator.database.transcripts().inRange(fromTs, toTs).map { LineView(it) }
     }
 
     suspend fun rawLinesForIds(ids: Collection<Long>): List<LineView> = withContext(Dispatchers.IO) {
-        val segments = ids.chunked(SQL_VARS).flatMap { ServiceLocator.database.transcripts().byIds(it) }
-            .sortedBy { it.startTs }
-        attachCorrections(segments.map { it.id }).let { latest -> segments.map { LineView(it, latest[it.id]) } }
-    }
-
-    private suspend fun attachCorrections(ids: List<Long>) =
         ids.chunked(SQL_VARS)
-            .flatMap { ServiceLocator.database.corrections().forSegments(it) }
-            .sortedWith(compareBy({ it.createdTs }, { it.id }))
-            .latestBySegment()
+            .flatMap { ServiceLocator.database.transcripts().byIds(it) }
+            .sortedBy { it.startTs }
+            .map { LineView(it) }
+    }
 
     /**
      * Every line the query selects, with its newest correction.
@@ -64,7 +56,7 @@ object Exporter {
                     rawLinesInRange(bounds.first, bounds.last + 1)
                 }
             }
-            base.filter { query.accepts(it.segment.startTs, primaryText(it, query.content)) }
+            base.filter { query.accepts(it.segment.startTs, it.text) }
         }
 
     /** The count and rough size for the live estimate, without building the file. */
@@ -118,9 +110,6 @@ object Exporter {
         ids.chunked(SQL_VARS)
             .flatMap { ServiceLocator.database.flagged().flaggedAmong(it) }
             .toSet()
-
-    private fun primaryText(line: LineView, content: String): String =
-        if (content == ExportDefaults.CONTENT_ORIGINAL) line.original else line.corrected
 
     private suspend fun share(context: Context, name: String, text: String, mime: String): String {
         val dir = File(context.cacheDir, "exports").apply { mkdirs() }

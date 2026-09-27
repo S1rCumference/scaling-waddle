@@ -3,7 +3,7 @@ package com.recorder.app
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import com.recorder.app.correction.EndOfDayWorker
+import com.recorder.app.summary.SummaryWorker
 import com.recorder.app.models.ModelDownloadService
 import com.recorder.app.models.ModelHealth
 import com.recorder.app.service.RecordingService
@@ -11,7 +11,6 @@ import com.recorder.app.ui.AppUiState
 import com.recorder.app.service.ResumeNotifier
 import com.recorder.app.work.RecordingWatchdog
 import com.recorder.core.asr.AsrEngineFactory
-import com.recorder.core.llm.local.LocalModelRuntime
 import com.recorder.core.storage.Clocks
 import com.recorder.core.storage.Diagnostics
 import kotlinx.coroutines.CoroutineScope
@@ -39,10 +38,6 @@ class RecorderApplication : Application() {
         AsrEngineFactory.installVerifier = { context ->
             if (StartupGuard.safeMode) SAFE_MODE_REASON else ModelHealth.asrProblem(context)
         }
-        // The same gate for the GGUF chat models, which llama.cpp memory-maps.
-        LocalModelRuntime.fileVerifier = { file ->
-            if (StartupGuard.safeMode) SAFE_MODE_REASON else ModelHealth.ggufProblem(this, file)
-        }
         // One clock for the whole app, read once and kept current. Every timestamp anywhere
         // goes through Clocks, so the preference cannot end up applied to only some of them.
         applicationScope.launch {
@@ -56,7 +51,7 @@ class RecorderApplication : Application() {
             return
         }
         RecordingWatchdog.ensureScheduled(this)
-        EndOfDayWorker.ensureScheduled(this)
+        SummaryWorker.ensureScheduled(this)
     }
 
     private companion object {

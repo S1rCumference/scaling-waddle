@@ -1,7 +1,6 @@
 package com.recorder.app.models
 
 import android.content.Context
-import com.recorder.core.llm.local.LocalModelRuntime
 import com.recorder.core.storage.Diagnostics
 
 /**
@@ -30,20 +29,6 @@ object ModelHealth {
     }
 
     /**
-     * Null when [file] is a complete install of a catalogued model, otherwise why not.
-     *
-     * A file with no catalogue entry is left alone: it was put there deliberately (by the
-     * fetch script, or by hand) and this is not the place to start refusing it.
-     */
-    fun ggufProblem(context: Context, file: java.io.File): String? {
-        val entry = runCatching { ModelCatalog.load(context) }
-            .getOrNull()
-            ?.firstOrNull { it.fileName == file.name }
-            ?: return null
-        return entry.installProblem(context)
-    }
-
-    /**
      * Model files on disk that the manifest no longer mentions, with their sizes.
      *
      * 3.0 dropped two of the three language models, and an install over the top does not
@@ -56,12 +41,23 @@ object ModelHealth {
             .getOrDefault(emptyList())
             .map { it.fileName }
             .toSet()
-        val dir = LocalModelRuntime.modelDir(context)
+        val dir = legacyLlmDir(context)
         return dir.listFiles()
             ?.filter { it.isFile && it.name.endsWith(".gguf") && it.name !in known }
             ?.sortedByDescending { it.length() }
             .orEmpty()
     }
+
+    /**
+     * Where the on-device language model used to live.
+     *
+     * Hard-coded rather than read from the runtime that owned it, because that runtime is gone.
+     * The path has to stay right regardless: everybody upgrading from 3.2 or earlier has a 768 MB
+     * Gemma sitting here that nothing will ever load again, and this is the only thing that will
+     * ever offer to remove it.
+     */
+    private fun legacyLlmDir(context: Context): java.io.File =
+        java.io.File(context.filesDir, "models/llm")
 
     /** Removes them, and says what was freed. Only ever from an explicit request. */
     fun removeStrayModelFiles(context: Context): String {

@@ -39,7 +39,6 @@ import androidx.compose.ui.unit.dp
 import com.recorder.app.models.InstallProgress
 import com.recorder.app.service.MicConflict
 import com.recorder.app.service.RecordingService
-import com.recorder.core.llm.local.DeviceCapabilities
 
 /**
  * First-run setup. One decision per screen, in the order that makes the phone work:
@@ -110,15 +109,10 @@ private fun WelcomeStep(viewModel: SetupViewModel) {
     Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Column(Modifier.padding(12.dp)) {
             Text("This phone", style = MaterialTheme.typography.titleSmall)
-            Body("${"%.0f".format(viewModel.ramGb)} GB of memory")
-            Body(
-                if (viewModel.enoughRam) {
-                    "Enough for recording, transcription and overnight correction."
-                } else {
-                    "Enough for recording and transcription. Correction needs about " +
-                        "${DeviceCapabilities.MIN_RAM_GB} GB and will not be offered."
-                },
-            )
+            // No memory figure any more. It was only ever there to say whether a language model
+            // would fit, and nothing loads one: recording and transcription run on any phone
+            // this app installs on, and summaries are a network request.
+            Body("Records and transcribes on the device. Nothing else is needed.")
         }
     }
 }
@@ -399,11 +393,6 @@ private fun TestStep(viewModel: SetupViewModel) {
 
     StatusLine("Recording running", recorderState == RecordingService.RecorderState.RECORDING)
     StatusLine("Transcription ready", viewModel.transcriptionReady())
-    StatusLine("On-device chat ready", viewModel.localChatReady())
-
-    viewModel.localChatBlocker()?.let {
-        Body("Chat is not available yet: $it. Recording and transcription do not depend on it.")
-    }
 }
 
 @Composable

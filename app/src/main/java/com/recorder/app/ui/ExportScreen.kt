@@ -146,12 +146,6 @@ fun ExportScreen(viewModel: RecorderViewModel, onClose: () -> Unit) {
 
         Group("What to write") {
             ChipRow(
-                ExportDefaults.contents,
-                query.content,
-                ExportDefaults::contentLabel,
-                viewModel::setExportContent,
-            )
-            ChipRow(
                 ExportDefaults.formats,
                 query.format,
                 ExportDefaults::formatLabel,

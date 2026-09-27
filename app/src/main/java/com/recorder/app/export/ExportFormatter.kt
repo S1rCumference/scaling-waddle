@@ -2,7 +2,6 @@ package com.recorder.app.export
 
 import com.recorder.app.ui.LineView
 import com.recorder.core.storage.Clocks
-import com.recorder.core.storage.CorrectionPass
 import com.recorder.core.storage.ExportDefaults
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -20,7 +19,7 @@ import java.util.TimeZone
 object ExportFormatter {
 
     /** CSV's header, and the order of its columns. */
-    const val CSV_HEADER = "date,time,text,source,flagged"
+    const val CSV_HEADER = "date,time,text,flagged"
 
     fun render(
         title: String,
@@ -49,12 +48,7 @@ object ExportFormatter {
             ExportDefaults.FORMAT_MARKDOWN -> 18L
             else -> 14L
         }
-        val both = query.content == ExportDefaults.CONTENT_BOTH
-        return lines.sumOf { line ->
-            val primary = primary(line, query.content).length.toLong()
-            val second = if (both && line.changed) line.original.length.toLong() + perLine else 0L
-            primary + second + perLine
-        } + HEADER_ALLOWANCE
+        return lines.sumOf { line -> line.text.length.toLong() + perLine } + HEADER_ALLOWANCE
     }
 
     /** `recorder_2026-09-01_to_2026-09-25.md` — ISO dates, so files sort by name. */
@@ -104,7 +98,7 @@ object ExportFormatter {
             if (markdown) append("# ").append(title).append("\n\n") else append(title).append("\n\n")
             val note = buildString {
                 append("Exported ").append(stamp.format(Date(exportedAt)))
-                append(" · ").append(lines.size).append(" lines · ").append(describe(query.content, lines))
+                append(" · ").append(lines.size).append(" lines · ").append(describe(lines))
                 query.timeWindow?.let { append(" · ").append(it.describe()) }
                 if (query.keywords.include.isNotEmpty()) {
                     append(" · ")
@@ -134,14 +128,9 @@ object ExportFormatter {
                 lastHour = h
 
                 val time = clock.format(date)
-                val text = primary(line, query.content)
+                val text = line.text
                 if (markdown) append("- **").append(time).append("** ").append(text).append('\n')
                 else append('[').append(time).append("] ").append(text).append('\n')
-
-                if (query.content == ExportDefaults.CONTENT_BOTH && line.changed) {
-                    if (markdown) append("  - _original:_ ").append(line.original).append('\n')
-                    else append("           (original) ").append(line.original).append('\n')
-                }
             }
         }
     }
@@ -155,13 +144,10 @@ object ExportFormatter {
             append(CSV_HEADER).append('\n')
             for (line in lines) {
                 val at = Date(line.segment.startTs)
-                rows(line, query.content).forEach { (text, source) ->
-                    append(csvField(date.format(at))).append(',')
-                    append(csvField(clock.format(at))).append(',')
-                    append(csvField(text)).append(',')
-                    append(csvField(source)).append(',')
-                    append(if (line.segment.id in flagged) "true" else "false").append('\n')
-                }
+                append(csvField(date.format(at))).append(',')
+                append(csvField(clock.format(at))).append(',')
+                append(csvField(line.text)).append(',')
+                append(if (line.segment.id in flagged) "true" else "false").append('\n')
             }
         }
     }
@@ -170,34 +156,15 @@ object ExportFormatter {
         val iso = fmt("yyyy-MM-dd'T'HH:mm:ssXXX", zone)
         return buildString {
             for (line in lines) {
-                rows(line, query.content).forEach { (text, source) ->
-                    append('{')
-                    append("\"at\":").append(jsonString(iso.format(Date(line.segment.startTs)))).append(',')
-                    append("\"epochMs\":").append(line.segment.startTs).append(',')
-                    append("\"text\":").append(jsonString(text)).append(',')
-                    append("\"source\":").append(jsonString(source)).append(',')
-                    append("\"flagged\":").append(line.segment.id in flagged)
-                    append("}\n")
-                }
+                append('{')
+                append("\"at\":").append(jsonString(iso.format(Date(line.segment.startTs)))).append(',')
+                append("\"epochMs\":").append(line.segment.startTs).append(',')
+                append("\"text\":").append(jsonString(line.text)).append(',')
+                append("\"flagged\":").append(line.segment.id in flagged)
+                append("}\n")
             }
         }
     }
-
-    /**
-     * One line becomes one row, or two when "both" is asked for and the correction changed
-     * something. Two rows rather than two columns, because a CSV with a fixed header is what
-     * a spreadsheet can actually sort and filter.
-     */
-    private fun rows(line: LineView, content: String): List<Pair<String, String>> = when {
-        content == ExportDefaults.CONTENT_ORIGINAL -> listOf(line.original to "original")
-        content == ExportDefaults.CONTENT_BOTH && line.changed ->
-            listOf(line.corrected to "corrected", line.original to "original")
-
-        else -> listOf(line.corrected to if (line.changed) "corrected" else "original")
-    }
-
-    private fun primary(line: LineView, content: String): String =
-        if (content == ExportDefaults.CONTENT_ORIGINAL) line.original else line.corrected
 
     /** RFC 4180: quote when it could be misread, and double any quote inside. */
     private fun csvField(value: String): String {
@@ -221,18 +188,15 @@ object ExportFormatter {
         append('"')
     }
 
-    private fun describe(content: String, lines: List<LineView>): String {
-        val engines = lines.mapNotNull { it.correction }
-            .groupingBy { "${it.engine}, ${CorrectionPass.label(it.pass)}" }
-            .eachCount()
-            .keys
-        val by = if (engines.isEmpty()) "" else " by " + engines.joinToString("; ")
-        return when (content) {
-            ExportDefaults.CONTENT_ORIGINAL -> "original text as transcribed"
-            ExportDefaults.CONTENT_BOTH -> "corrected text$by, with the original under any changed line"
-            else -> "corrected text$by (original where no correction exists)"
-        }
-    }
+    /**
+     * What the export contains, for the header.
+     *
+     * One sentence where there used to be three, because there is one version of a line. The
+     * original/corrected/both choice went with the correction pass: every option would have
+     * produced identical files.
+     */
+    private fun describe(lines: List<LineView>): String =
+        "${lines.size} line(s) as transcribed on the device"
 
     private fun fmt(pattern: String, zone: TimeZone) =
         SimpleDateFormat(pattern, Locale.getDefault()).apply { timeZone = zone }

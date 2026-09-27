@@ -12,8 +12,6 @@ import com.recorder.app.models.ModelInstallStore
 import com.recorder.app.models.ModelInstaller
 import com.recorder.app.models.ModelRole
 import com.recorder.core.asr.AsrEngineFactory
-import com.recorder.core.llm.local.DeviceCapabilities
-import com.recorder.core.llm.local.LocalModelRuntime
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -74,10 +72,6 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
-    val ramGb = DeviceCapabilities.totalRamGb(application)
-
-    /** False on a phone too small to run the correction model; it still records. */
-    val enoughRam = DeviceCapabilities.enoughRamForAModel(application)
 
     init {
         reload()
@@ -200,19 +194,7 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
         return AsrEngineFactory.sherpaBundled && AsrEngineFactory.modelsInstalled(context)
     }
 
-    fun localChatReady(): Boolean =
-        LocalModelRuntime.available &&
-            models.value.any { it.entry.role == ModelRole.SMALL_CHAT && it.installed }
 
-    /** Why local chat is unavailable, or null when it is ready. */
-    fun localChatBlocker(): String? = when {
-        !LocalModelRuntime.available -> LocalModelRuntime.unavailableReason
-        models.value.none { it.entry.role == ModelRole.SMALL_CHAT } ->
-            "No chat model is listed in this build's catalogue yet"
-
-        !localChatReady() -> "No chat model installed"
-        else -> null
-    }
 
     fun next() {
         _step.value = when (_step.value) {

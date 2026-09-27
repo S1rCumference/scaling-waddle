@@ -131,7 +131,6 @@ data class ExportQuery(
     val includeField: String = "",
     val excludeField: String = "",
     val includeAll: Boolean = false,
-    val content: String = ExportDefaults.CONTENT_CORRECTED,
     val format: String = ExportDefaults.FORMAT_MARKDOWN,
     val grouping: String = ExportGrouping.DAY,
     val destination: String = ExportDestinations.SHARE,

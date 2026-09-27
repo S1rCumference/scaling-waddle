@@ -29,12 +29,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.Alignment
-import com.recorder.app.correction.CorrectionGate
-import com.recorder.app.correction.CorrectionRunner
 import com.recorder.app.models.InstallProgress
 import com.recorder.app.service.RecordingService
-import com.recorder.core.llm.TokenBudget
-import com.recorder.core.llm.local.OnDeviceModel
+import com.recorder.core.llm.cloud.CloudProvider
+import com.recorder.app.summary.SummaryWorker
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.recorder.core.storage.Clocks
 import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
@@ -54,13 +53,12 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
     // Collected here so each row can show its current value without being opened, which is
     // the common reason for coming to this screen at all.
     val threshold by viewModel.vadThreshold.collectAsState()
-    val taughtCount by viewModel.taughtCorrections.collectAsState()
-    val pendingCount by viewModel.pendingCorrections.collectAsState()
-    val overnightOn by viewModel.endOfDayEnabled.collectAsState()
     val diagnostics by viewModel.diagnostics.collectAsState()
     val diagnosticCount = diagnostics.size
-    val modelReady = remember(pendingCount) { viewModel.modelStatus().substringAfter("— ") }
     val batteryLine = remember(diagnosticCount) { viewModel.batterySummary() }
+    val summariesOn by viewModel.summariesEnabled.collectAsState()
+    val summaryKeySet by viewModel.summaryKeySet.collectAsState()
+    val summaryProblem by viewModel.summaryProblem.collectAsState()
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(if (LocalCompact.current) 4.dp else 16.dp),
@@ -86,23 +84,21 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
                 },
             ) { Text("Save triggers") }
         }
+        Section("Speech models", "models", value = "Voice detector and recogniser") {
+            ModelsSection(viewModel, onRunSetup)
         }
-        Group("AI") {
-        Section("Model", "models", value = modelReady) { ModelsSection(viewModel, onRunSetup) }
+        }
+        Group("Summaries") {
         Section(
-            "Correction",
-            "correction",
+            "Where summaries come from",
+            "summaries",
             value = when {
-                !overnightOn -> "Overnight pass off"
-                pendingCount > 0 -> "$pendingCount line(s) never corrected"
-                else -> "Nothing waiting"
+                summaryProblem.isNotBlank() -> summaryProblem.take(48)
+                !summaryKeySet -> "No key set — off"
+                summariesOn -> "On, every six hours"
+                else -> "Key set, switched off"
             },
-        ) { CorrectionSection(viewModel) }
-        Section(
-            "What the AI has been taught",
-            "taught",
-            value = if (taughtCount.isEmpty()) "Nothing yet" else "${taughtCount.size} correction(s)",
-        ) { TaughtSection(viewModel) }
+        ) { SummariesSection(viewModel) }
         }
         Group("Data") {
         Section("Export defaults", "export", value = "Set on the Export screen") { ExportDefaultsSection(viewModel) }
@@ -407,61 +403,6 @@ private fun MicSensitivitySection(viewModel: RecorderViewModel) {
  * list is visible. It is a plain list of substitutions, not training of any kind.
  */
 @Composable
-private fun TaughtSection(viewModel: RecorderViewModel) {
-    val taught by viewModel.taughtCorrections.collectAsState()
-
-    Text(
-        "Substitutions you made by hand, kept as a plain list. Nothing adds to this list in " +
-            "3.0 — the summary screen that fed it is gone — so what is here is what was " +
-            "taught before, and it can be read and cleared but not added to.",
-        style = MaterialTheme.typography.bodySmall,
-    )
-    if (taught.isEmpty()) {
-        Text(
-            "Nothing was ever taught.",
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(top = 8.dp),
-        )
-        return
-    }
-
-    taught.forEach { entry ->
-        Card(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(entry.wrong, style = MaterialTheme.typography.bodySmall)
-                    Text(
-                        if (entry.corrected.isBlank()) "→ marked wrong" else "→ ${entry.corrected}",
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-                TextButton(onClick = { viewModel.forgetCorrection(entry.id) }) { Text("Forget") }
-            }
-        }
-    }
-    TextButton(onClick = viewModel::forgetAllCorrections) { Text("Forget everything") }
-}
-
-/** "4 minutes ago", "yesterday" — enough to judge freshness without doing arithmetic. */
-private fun relativeTime(ts: Long): String {
-    val ago = System.currentTimeMillis() - ts
-    return when {
-        ago < 60_000 -> "just now"
-        ago < 60 * 60_000 -> "${ago / 60_000} minute(s) ago"
-        ago < 24 * 60 * 60_000L -> "${ago / (60 * 60_000)} hour(s) ago"
-        else -> "${ago / (24 * 60 * 60_000L)} day(s) ago"
-    }
-}
-
-/**
- * A card of related rows. Five of these replaced seventeen top-level entries.
- *
- * Seventeen things in one flat accordion is a list you scroll rather than a place you
- * navigate: nothing is grouped, so finding anything means reading all of it. Cards give the
- * eye somewhere to land first, and each row carries its current value on the right so the
- * common case — checking what something is set to — needs no tap at all.
- */
-@Composable
 private fun Group(title: String, content: @Composable () -> Unit) {
     Text(
         title,
@@ -517,18 +458,12 @@ private fun ModelsSection(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
     val catalogue = remember { viewModel.catalogue() }
 
     Text(
-        "3.0 runs one language model and one speech model. There is no tier to pick and no " +
-            "per-task choice to make: the language model corrects transcript lines, and that " +
-            "is the only thing it is ever asked to do.",
+        "Two files, about 460 MB, downloaded once and then never again: a voice detector that " +
+            "decides when somebody is speaking, and a speech recogniser that writes it down. " +
+            "Both run on this phone and neither ever leaves it. There is no language model here " +
+            "any more — summaries are a network request, so there is nothing to download for them.",
         style = MaterialTheme.typography.bodySmall,
     )
-    Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Text(
-            viewModel.modelStatus(),
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(12.dp),
-        )
-    }
 
     catalogue.forEach { entry ->
         val isInstalled = viewModel.isModelInstalled(entry)
@@ -569,119 +504,131 @@ private fun ModelsSection(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
 }
 
 /**
- * Whether what is on disk is actually complete, and the one button that fixes it when it is
- * not. "Installed" here means the exact byte count the manifest gives, or, for the speech
- * model's unpacked archive, an install record written after the last file was in place — not
- * "a file of that name exists", which is true of a download that stopped one byte in and is
- * how a half-installed speech model took the whole app down on every launch.
+ * Where summaries are sent, and the key that lets them be.
+ *
+ * This card is the whole of the AI surface now. What it replaced was three: a model card listing
+ * a gigabyte of weights, a correction card with token ceilings and battery thresholds, and a list
+ * of things the user had taught a model that no longer exists.
+ *
+ * The key is write-only from the screen's point of view. It is stored in the app's own
+ * preferences, it is never displayed back, and it is never in the build — a build with a key in it
+ * would be a key published to everyone who installs the app.
  */
 @Composable
-private fun ModelFileCheck(viewModel: RecorderViewModel) {
-    val repaired by viewModel.repairReport.collectAsState()
-    var survey by remember { mutableStateOf<List<Pair<String, String?>>?>(null) }
+private fun SummariesSection(viewModel: RecorderViewModel) {
+    val enabled by viewModel.summariesEnabled.collectAsState()
+    val keySet by viewModel.summaryKeySet.collectAsState()
+    val providerName by viewModel.summaryProviderName.collectAsState()
+    val baseUrl by viewModel.summaryBaseUrl.collectAsState()
+    val modelName by viewModel.summaryModelName.collectAsState()
+    val problem by viewModel.summaryProblem.collectAsState()
+    val backoffUntil by viewModel.summaryBackoffUntil.collectAsState()
+    val progress by viewModel.summaryProgress.collectAsState()
+    val provider = CloudProvider.byName(providerName.ifBlank { null })
+
+    var keyField by remember { mutableStateOf("") }
+    var urlField by remember(baseUrl, providerName) { mutableStateOf(baseUrl.ifBlank { provider.baseUrl }) }
+    var modelField by remember(modelName, providerName) { mutableStateOf(modelName.ifBlank { provider.defaultModel }) }
 
     Text(
-        "Model files",
-        style = MaterialTheme.typography.labelLarge,
-        modifier = Modifier.padding(top = 10.dp),
+        "Summaries are the one thing this app sends anywhere. Transcript text goes to the " +
+            "endpoint below — never audio, which is recognised on the phone and stays there. " +
+            "Nothing is sent until you paste a key and switch this on.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+
+    Choice(
+        label = "Provider",
+        options = CloudProvider.entries.map { it.label },
+        selected = provider.label,
+        onSelect = { label ->
+            CloudProvider.entries.firstOrNull { it.label == label }?.let(viewModel::setSummaryProvider)
+        },
+    )
+    Text(provider.freeTier, style = MaterialTheme.typography.bodySmall)
+    Text(
+        "Get a key: ${provider.keyUrl}",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.primary,
+    )
+
+    OutlinedTextField(
+        value = keyField,
+        onValueChange = { keyField = it },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        label = { Text(if (keySet) "Replace the API key" else "API key") },
     )
     Row {
-        TextButton(onClick = { survey = viewModel.modelSurvey() }) { Text("Check files") }
-        TextButton(onClick = viewModel::repairModels) { Text("Remove unfinished") }
-    }
-    // 3.0 dropped two of the three language models. An install over the top leaves their
-    // weights behind, and nothing in the catalogue points at them any more, so they are
-    // offered for removal rather than left to be found.
-    val stray = remember(repaired) { viewModel.strayModels() }
-    stray?.let { line ->
-        Text(line, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
-        TextButton(onClick = viewModel::removeStrayModels) { Text("Remove them") }
-    }
-    survey?.let { rows ->
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(8.dp)) {
-                rows.forEach { (name, problem) ->
-                    Text(
-                        "$name — ${problem ?: "complete"}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (problem == null) MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
-        }
-    }
-    repaired?.let {
-        Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
-    }
-}
-
-@Composable
-private fun CorrectionSection(viewModel: RecorderViewModel) {
-    val pending by viewModel.pendingCorrections.collectAsState()
-    val lastRun by viewModel.lastCorrectionRun.collectAsState()
-
-    // When it last ran, how long it took, how much is waiting, and why it is or is not
-    // running now. Four facts that between them answer "is the AI working".
-    Card(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-        Column(Modifier.padding(12.dp)) {
-            Text("Automatic passes", style = MaterialTheme.typography.titleSmall)
-            Text(viewModel.schedulingStatus(), style = MaterialTheme.typography.bodySmall)
-            Text(
-                "Runs on its own once a night, and only while charging, with the screen off, " +
-                    "above ${CorrectionGate.MIN_BATTERY_PERCENT}% battery, and not already hot. " +
-                    "Otherwise it waits for the next night.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                lastRun?.let {
-                    "Last run ${relativeTime(it.atTs)} · ${"%.1f".format(it.durationMs / 1000.0)}s · " +
-                        "${it.lines} line(s)"
-                } ?: "Has not run yet.",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-            Text(
-                if (pending > 0) "$pending line(s) never corrected" else "Nothing waiting",
-                style = MaterialTheme.typography.bodySmall,
-            )
+        Button(
+            onClick = {
+                viewModel.setSummaryApiKey(keyField)
+                keyField = ""
+            },
+            enabled = keyField.isNotBlank(),
+        ) { Text("Save key") }
+        if (keySet) {
+            TextButton(onClick = { viewModel.setSummaryApiKey("") }) { Text("Remove key") }
         }
     }
 
-    val endOfDay by viewModel.endOfDayEnabled.collectAsState()
-    val progress by viewModel.correctionProgress.collectAsState()
-    val summaryProgress by viewModel.summaryProgress.collectAsState()
+    OutlinedTextField(
+        value = urlField,
+        onValueChange = { urlField = it },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        label = { Text("Base URL") },
+    )
+    OutlinedTextField(
+        value = modelField,
+        onValueChange = { modelField = it },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        label = { Text("Model") },
+    )
+    Row {
+        TextButton(
+            onClick = {
+                viewModel.setSummaryBaseUrl(urlField)
+                viewModel.setSummaryModel(modelField)
+            },
+        ) { Text("Save endpoint") }
+    }
 
-    Text(
-        "${OnDeviceModel.LABEL} re-reads a transcript line with the lines around it and fixes " +
-            "misheard words. The original is always kept; corrected text is stored beside it " +
-            "and labelled with the pass and the model that produced it.",
-        style = MaterialTheme.typography.bodySmall,
-    )
-    Text(
-        "Two things start it and nothing else does: this overnight pass, and \"Correct\" " +
-            "on a group in Logs. Each batch is capped at " +
-            "${CorrectionRunner.MAX_INPUT_TOKENS} tokens in and " +
-            "${TokenBudget.CORRECTION_MAX_TOKENS} out, with 45 seconds a batch and ten minutes " +
-            "for the whole pass. Anything that runs past those is abandoned rather than " +
-            "retried, and the model is unloaded the moment the pass ends.",
-        style = MaterialTheme.typography.bodySmall,
-    )
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Switch(checked = endOfDay, onCheckedChange = viewModel::setEndOfDayEnabled)
-        Text("Correct and summarise overnight while charging", modifier = Modifier.padding(start = 8.dp))
+        Switch(
+            checked = enabled,
+            onCheckedChange = viewModel::setSummariesEnabled,
+            enabled = keySet,
+        )
+        Text(
+            if (keySet) "Summarise automatically" else "Paste a key first",
+            modifier = Modifier.padding(start = 8.dp),
+        )
     }
     Text(
-        "After correcting, the same pass names each hour of that day and writes a couple of " +
-            "sentences on it, then rolls the hours up into the day and the days up into the " +
-            "month. Those names are what the groups in Logs are labelled with. Each level is " +
-            "summarised from the level below rather than from the transcript again, which is " +
-            "why a month costs one short call instead of tens of thousands of lines. Any group " +
-            "can be summarised on demand with \"Summarise\" when it is open.",
+        "Runs about four times a day over Wi-Fi, ${SummaryWorker.BATCH} spans at a time, oldest " +
+            "first: hours, then the days they make up, then weeks, then months. Spreading it out " +
+            "is what keeps a per-minute rate limit out of the way and a free allowance lasting.",
         style = MaterialTheme.typography.bodySmall,
     )
+
+    Row(Modifier.padding(top = 6.dp)) {
+        Button(onClick = viewModel::summariseNow, enabled = keySet) { Text("Summarise now") }
+    }
+
     progress?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-    summaryProgress?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    if (problem.isNotBlank()) {
+        Text(problem, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+    }
+    val waiting = backoffUntil - System.currentTimeMillis()
+    if (waiting > 0) {
+        Text(
+            "Rate limited — next attempt after ${Clocks.shortTime(backoffUntil)}.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
 }
 
 @Composable

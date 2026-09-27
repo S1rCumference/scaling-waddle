@@ -213,7 +213,7 @@ private fun CompactShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) {
 private fun CoverStatusBar(viewModel: RecorderViewModel) {
     val state by viewModel.recorderState.collectAsState()
     val since by RecordingService.recordingSince.collectAsState()
-    val progress by viewModel.correctionProgress.collectAsState()
+    val progress by viewModel.summaryProgress.collectAsState()
     val context = LocalContext.current
 
     // Recomputed once a second at most; the cover screen is idle most of its life.
@@ -284,7 +284,7 @@ private fun ExpandedShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
     val showExport by AppUiState.showExport.collectAsState()
     val status by viewModel.status.collectAsState()
     val recorderState by viewModel.recorderState.collectAsState()
-    val progress by viewModel.correctionProgress.collectAsState()
+    val progress by viewModel.summaryProgress.collectAsState()
     val snackbar = androidx.compose.runtime.remember { SnackbarHostState() }
 
     // A delete offers Undo on the same snackbar that carries the message. That is the only

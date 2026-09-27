@@ -8,7 +8,6 @@ import com.recorder.app.admin.DeviceOwner
 import com.recorder.app.admin.Lockdown
 import com.recorder.app.cover.CoverDisplays
 import com.recorder.core.asr.AsrEngineFactory
-import com.recorder.core.llm.local.LocalModelRuntime
 import androidx.lifecycle.viewModelScope
 import com.recorder.app.ServiceLocator
 import com.recorder.app.service.PowerMetrics
@@ -17,21 +16,19 @@ import com.recorder.app.ui.setup.SetupStatus
 import com.recorder.app.update.AvailableUpdate
 import com.recorder.app.update.UpdateChecker
 import com.recorder.app.service.RecordingService
-import com.recorder.core.llm.local.DeviceCapabilities
-import com.recorder.core.llm.local.OnDeviceModel
 import com.recorder.core.storage.FlaggedItem
 import com.recorder.core.storage.Folder
 import com.recorder.core.storage.TranscriptSegment
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
-import com.recorder.app.correction.CorrectionGate
 import com.recorder.app.data.Deletions
 import com.recorder.app.summary.SummaryRunner
 import com.recorder.app.summary.asGroupSummary
 import com.recorder.core.llm.GroupSummary
-import com.recorder.app.correction.CorrectionRunner
-import com.recorder.app.correction.OnDemandAiWorker
+import com.recorder.core.llm.cloud.CloudProvider
+import com.recorder.app.summary.SummariseGroupWorker
+import com.recorder.app.summary.SummaryWorker
 import com.recorder.app.export.ExportGrouping
 import com.recorder.app.export.ExportQuery
 import com.recorder.app.export.ExportRange
@@ -45,7 +42,6 @@ import com.recorder.app.models.ModelInstallStore
 import com.recorder.app.service.MicConflict
 import com.recorder.app.service.MicLevels
 import com.recorder.core.storage.DayKey
-import com.recorder.core.storage.CorrectionRunRecord
 import com.recorder.core.storage.DaySummary
 import com.recorder.app.StartupGuard
 import com.recorder.app.diag.DeviceWatch
@@ -57,9 +53,7 @@ import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
 import com.recorder.core.storage.FtsQuery
 import com.recorder.core.storage.HourSummary
-import com.recorder.core.storage.UserCorrection
 import com.recorder.core.storage.RunningTasks
-import com.recorder.core.storage.latestBySegment
 import java.util.TimeZone
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -128,10 +122,8 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     val tab: StateFlow<AppTab> = AppUiState.tab
     val openGroup: StateFlow<GroupRef?> = AppUiState.openGroup
-    val textMode: StateFlow<TextMode> = AppUiState.textMode
     val selection: StateFlow<Set<Long>> = AppUiState.selection
     val micSilenced: StateFlow<Boolean> = RecordingService.micSilenced
-    val correctionProgress: StateFlow<String?> = CorrectionRunner.progress
 
     /**
      * What the app is busy with, or null. Drives the progress bar on both screens: work
@@ -233,13 +225,12 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
             if (group == null || group.kind == GroupKind.ALL) {
                 flowOf(emptyList())
             } else {
-                combine(
-                    db.transcripts().inRangeFlow(group.fromTs, group.toTs),
-                    db.corrections().inRangeFlow(group.fromTs, group.toTs),
-                ) { segments, corrections ->
-                    val latest = corrections.latestBySegment()
-                    segments.map { LineView(it, latest[it.id]) }
-                }
+                // Just the transcript. Correction rows from older releases are still in the
+                // database and still migrate, but nothing reads them: there is no correction
+                // pass any more, so a "corrected" view would show a mixture of text from a
+                // feature that no longer exists.
+                db.transcripts().inRangeFlow(group.fromTs, group.toTs)
+                    .map { segments -> segments.map { LineView(it) } }
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -291,8 +282,6 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         AppUiState.open(group)
         if (group != null) AppUiState.selectTab(AppTab.LOGS)
     }
-
-    fun setTextMode(mode: TextMode) = AppUiState.setMode(mode)
 
     fun toggleSelected(id: Long) = AppUiState.toggleSelected(id)
 
@@ -412,23 +401,11 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
      */
     fun summarise(group: GroupRef) {
         if (!canSummarise(group)) return
-        OnDemandAiWorker.enqueue(getApplication(), OnDemandAiWorker.JOB_SUMMARISE, group)
+        SummariseGroupWorker.enqueue(getApplication(), group)
         _status.value = "Summarising ${group.title()}…"
     }
 
     fun spanKey(fromTs: Long, toTs: Long): String = "$fromTs:$toTs"
-
-    /**
-     * Corrects one group, now, because the user pressed the button.
-     *
-     * The only on-demand AI action left in the app. Runs off the main thread and reports
-     * through the same progress surface as the overnight pass, so it can be cancelled.
-     */
-    fun recorrect(group: GroupRef) {
-        if (group.kind == GroupKind.ALL) return
-        OnDemandAiWorker.enqueue(getApplication(), OnDemandAiWorker.JOB_CORRECT, group)
-        _status.value = "Correcting ${group.title()}…"
-    }
 
     fun copy(text: String) {
         val context = getApplication<Application>()
@@ -586,7 +563,6 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
                 includeField = settings.exportInclude.first(),
                 excludeField = settings.exportExclude.first(),
                 includeAll = settings.exportIncludeAll.first(),
-                content = settings.exportContent.first(),
                 format = settings.exportFormat.first(),
                 grouping = settings.exportGrouping.first(),
                 destination = settings.exportDestination.first(),
@@ -630,7 +606,6 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     fun setExportInclude(value: String) = editExport { it.copy(includeField = value) }
     fun setExportExclude(value: String) = editExport { it.copy(excludeField = value) }
     fun setExportIncludeAll(value: Boolean) = editExport { it.copy(includeAll = value) }
-    fun setExportContent(value: String) = editExport { it.copy(content = value) }
     fun setExportFormat(value: String) = editExport { it.copy(format = value) }
     fun setExportGrouping(value: String) = editExport { it.copy(grouping = value) }
     fun setExportDestination(value: String) = editExport { it.copy(destination = value) }
@@ -691,7 +666,6 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
             include = query.includeField,
             exclude = query.excludeField,
             includeAll = query.includeAll,
-            content = query.content,
             format = query.format,
             grouping = query.grouping,
             destination = query.destination,
@@ -719,18 +693,66 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         if (!MicConflict.openOther(getApplication())) _status.value = "Could not open the other Recorder."
     }
 
-    // --- Model and correction settings ---
+    // --- Summary settings: the provider, the key, and whether it runs at all ----------------
 
-    val endOfDayEnabled = settings.endOfDayEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val summariesEnabled: StateFlow<Boolean> =
+        settings.summariesEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    fun setEndOfDayEnabled(on: Boolean) = viewModelScope.launch { settings.setEndOfDayEnabled(on) }
+    val summaryProviderName: StateFlow<String> =
+        settings.summaryProvider.stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
-    /** The one model, and whether it can be loaded right now. */
-    fun modelStatus(): String {
+    val summaryBaseUrl: StateFlow<String> =
+        settings.summaryBaseUrl.stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
+    val summaryModelName: StateFlow<String> =
+        settings.summaryModel.stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
+    /** Whether a key has been entered. The key itself never reaches the screen. */
+    val summaryKeySet: StateFlow<Boolean> = settings.summaryApiKey
+        .map { it.isNotBlank() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** What is stopping summaries, in a sentence, or blank. */
+    val summaryProblem: StateFlow<String> =
+        settings.summaryProblem.stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
+    /** When a rate limit says to wait until, or 0. */
+    val summaryBackoffUntil: StateFlow<Long> =
+        settings.summaryBackoffUntil.stateIn(viewModelScope, SharingStarted.Eagerly, 0L)
+
+    fun setSummariesEnabled(on: Boolean) = viewModelScope.launch {
+        settings.setSummariesEnabled(on)
         val context = getApplication<Application>()
-        return OnDeviceModel.problem(context)
-            ?.let { "${OnDeviceModel.LABEL} — $it" }
-            ?: "${OnDeviceModel.LABEL} — ready"
+        if (on) SummaryWorker.ensureScheduled(context) else SummaryWorker.cancel(context)
+        _status.value = if (on) "Summaries on — next pass within six hours." else "Summaries off."
+    }
+
+    /** Picking a preset fills the URL and model with that provider's defaults. */
+    fun setSummaryProvider(provider: CloudProvider) = viewModelScope.launch {
+        settings.setSummaryProvider(provider.name, provider.baseUrl, provider.defaultModel)
+        _status.value = "${provider.label} selected."
+    }
+
+    fun setSummaryBaseUrl(url: String) = viewModelScope.launch { settings.setSummaryBaseUrl(url) }
+
+    fun setSummaryModel(model: String) = viewModelScope.launch { settings.setSummaryModel(model) }
+
+    fun setSummaryApiKey(key: String) = viewModelScope.launch {
+        settings.setSummaryApiKey(key)
+        _status.value = if (key.isBlank()) "Key cleared." else "Key saved."
+    }
+
+    /**
+     * Summarises the oldest unnamed spans now, so the setup can be proved without waiting six
+     * hours for the schedule to come round.
+     */
+    fun summariseNow() = viewModelScope.launch(Dispatchers.IO) {
+        _status.value = "Looking for spans to summarise…"
+        val written = runCatching { SummaryRunner.catchUp(SummaryWorker.BATCH) }.getOrDefault(0)
+        _status.value = when {
+            written > 0 -> "Wrote $written summary(ies)."
+            else -> SummaryRunner.lastError ?: "Nothing waiting to be summarised."
+        }
     }
 
     /** Per-model download state, so Settings shows the same truth as the wizard. */
@@ -826,35 +848,7 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
      */
     fun cancelRunning() {
         RunningTasks.cancelAll()
-        OnDemandAiWorker.cancel(getApplication())
-    }
-
-    // --- AI scheduling ---------------------------------------------------------------------
-
-    /** Lines waiting for a pass. Drives the "process now" control and the Settings figure. */
-    val pendingCorrections: StateFlow<Int> = CorrectionRunner.pendingCount()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
-
-    /** The last pass, persisted, so this does not read "never" after every restart. */
-    val lastCorrectionRun: StateFlow<CorrectionRunRecord?> = settings.lastCorrectionRun
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
-
-    /** Why automatic passes are or are not running right now, in a sentence. */
-    fun schedulingStatus(): String = CorrectionGate.describe(getApplication())
-
-    // --- The reviewable summary ------------------------------------------------------------
-
-    /** Everything the user has taught it, newest first, for Settings. */
-    val taughtCorrections: StateFlow<List<UserCorrection>> = db.review().corrections()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    fun forgetCorrection(id: Long) = viewModelScope.launch(Dispatchers.Default) {
-        db.review().forget(id)
-    }
-
-    fun forgetAllCorrections() = viewModelScope.launch(Dispatchers.Default) {
-        db.review().forgetAll()
-        _status.value = "Cleared what the AI had been taught."
+        SummariseGroupWorker.cancel(getApplication())
     }
 
     /** When the current pause ends, or 0. Shown on both the inner and the cover screen. */
@@ -1001,8 +995,6 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
             Segments decoded: ${s.transcriptions}
             Decoder CPU time: ${s.asrCpuMs / 1000}s (${"%.2f".format(s.asrDutyCyclePercent)}% duty cycle)
             Decode per hour: ${if (hours > 0) "%.0fs".format(s.asrCpuMs / 1000.0 / hours) else "n/a"}
-            Model loads / unloads: ${LocalModelRuntime.loadCount} / ${LocalModelRuntime.unloadCount}
-            Model resident now: ${LocalModelRuntime.current ?: "no"}
 
             No wakelocks are taken by this app. The foreground service and the audio
             recorder keep the CPU available while recording; nothing else holds one.
@@ -1054,9 +1046,6 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
      */
     fun deviceSummary(): String {
         val context = getApplication<Application>()
-        val ram = "%.1f".format(DeviceCapabilities.totalRamGb(context))
-        val model = OnDeviceModel.problem(context)?.let { "${OnDeviceModel.LABEL}: $it" }
-            ?: "${OnDeviceModel.LABEL}: ready"
 
         val asr = when {
             !AsrEngineFactory.sherpaBundled -> "not bundled in this build"
@@ -1064,26 +1053,24 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
             else -> "runtime ${AsrEngineFactory.sherpaVersion}, model installed"
         }
 
-        val llm = LocalModelRuntime.unavailableReason
-            ?: ("llama.cpp @ ${LocalModelRuntime.commit}" +
-                (LocalModelRuntime.current?.let { ", loaded: $it" } ?: ", idle") +
-                (LocalModelRuntime.lastError?.let { "\n  last failure: $it" }.orEmpty()))
-
-        // The kernels llama.cpp dlopen()s at start-up. An empty list here is the whole
-        // reason every model "failed to load" while looking perfectly installed.
-        val backends = LocalModelRuntime.backendProblem(context)
-            ?: LocalModelRuntime.nativeLibrarySummary(context)
+        // No local AI runtime section any more: there is no llama.cpp in the build, no weights on
+        // disk and no backend list to go wrong. What used to be the longest and most fragile part
+        // of this report is now one line about where summaries are sent.
+        val provider = CloudProvider.byName(summaryProviderName.value.ifBlank { null })
+        val summaries = when {
+            !summaryKeySet.value -> "no API key set — summaries are off"
+            !summariesEnabled.value -> "${provider.label}, key set, switched off"
+            else -> "${provider.label}, model ${summaryModelName.value.ifBlank { provider.defaultModel }}" +
+                (summaryProblem.value.takeIf { it.isNotBlank() }?.let { "\n  problem: $it" } ?: "")
+        }
 
         return """
             Device: ${Build.MANUFACTURER} ${Build.MODEL}
             Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})
-            RAM ${ram} GB
             App ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})
 
             Speech recognition: $asr
-            Local AI runtime: $llm
-            Correction model: $model
-            Native libraries: $backends
+            Summaries: $summaries
 
             Displays (read this open, then closed, to learn this phone's cover display):
             ${CoverDisplays.describeAll(context)}

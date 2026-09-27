@@ -5,12 +5,11 @@ import android.os.Build
 import com.recorder.app.BuildConfig
 import com.recorder.app.ServiceLocator
 import com.recorder.app.StartupGuard
-import com.recorder.app.correction.CorrectionGate
-import com.recorder.app.correction.CorrectionRunner
 import com.recorder.app.models.ModelHealth
 import com.recorder.app.service.RecordingService
 import com.recorder.core.asr.AsrEngineFactory
-import com.recorder.core.llm.local.LocalModelRuntime
+import com.recorder.core.llm.cloud.CloudProvider
+import com.recorder.app.summary.SummaryRunner
 import com.recorder.core.storage.AiPasses
 import com.recorder.core.storage.Clocks
 import com.recorder.core.storage.DiagnosticEntry
@@ -36,6 +35,7 @@ import kotlinx.coroutines.flow.first
 object SelfReport {
 
     private const val PASSES_LISTED = 12
+    private const val SUMMARY_COUNT_LIMIT = 4_000
     private const val FAILURES_LISTED = 20
     private const val EVENTS_LISTED = 12
 
@@ -55,11 +55,9 @@ object SelfReport {
             out.line("this start is not yet proven healthy (${StartupGuard.unhealthyStarts} unproven)")
         }
         out.line(DeviceWatch.read(context).describe())
-        out.line("automatic AI passes: ${CorrectionGate.describe(context).lowercase()}")
 
         models(context, out)
-        aiPasses(out)
-        corrections(out)
+        summaries(out)
         transcription(out)
         detector(out)
         events(out)
@@ -86,94 +84,63 @@ object SelfReport {
         out.line("speech model: ${AsrEngineFactory.modelProblem(context) ?: "loadable"}")
     }
 
-    // --- AI ------------------------------------------------------------------------------
+    // --- Summaries -----------------------------------------------------------------------
 
-    private fun aiPasses(out: StringBuilder) {
-        out.section("AI PASSES")
-        out.line(
-            "model: " + (
-                LocalModelRuntime.unavailableReason
-                    ?: ((LocalModelRuntime.current ?: "none resident") +
-                        " · llama.cpp @ ${LocalModelRuntime.commit.take(12)}")
-                ),
+    /**
+     * Where summaries are sent, whether they are running, and what the last requests cost.
+     *
+     * This replaced two sections — a local model's residency and a correction backlog — that
+     * between them took up half the report and described machinery that no longer exists. There
+     * is no model on this phone to be resident, and no correction pass to be behind on.
+     */
+    private suspend fun summaries(out: StringBuilder) {
+        out.section("SUMMARIES")
+        val settings = ServiceLocator.settings
+        val provider = CloudProvider.byName(
+            runCatching { settings.summaryProvider.first() }.getOrNull()?.ifBlank { null },
         )
-        LocalModelRuntime.lastError?.let { out.line("last load failure: $it") }
+        val keySet = runCatching { settings.summaryApiKey.first().isNotBlank() }.getOrDefault(false)
+        val enabled = runCatching { settings.summariesEnabled.first() }.getOrDefault(false)
+        val model = runCatching { settings.summaryModel.first() }.getOrNull()
+            ?.ifBlank { provider.defaultModel } ?: provider.defaultModel
+
+        out.line("provider: ${provider.label} · model $model")
+        out.line("api key set: ${if (keySet) "yes" else "no"}")
+        out.line("scheduled passes: ${if (enabled) "on" else "off"}")
+
+        val backoff = runCatching { settings.summaryBackoffUntil.first() }.getOrDefault(0L)
+        val waiting = backoff - System.currentTimeMillis()
+        if (waiting > 0) out.line("rate limited for another ${waiting / 1000}s")
+        runCatching { settings.summaryProblem.first() }.getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { out.line("problem: $it") }
+        SummaryRunner.lastError?.let { out.line("last attempt: $it") }
+
+        val stored = runCatching {
+            ServiceLocator.database.review().recent(SUMMARY_COUNT_LIMIT).first().size
+        }.getOrNull()
+        out.line("summaries stored: ${stored?.toString() ?: "could not be read"}")
+        val pending = runCatching { SummaryRunner.pendingSpans().size }.getOrNull()
+        out.line("spans waiting: ${pending?.toString() ?: "could not be read"}")
 
         val passes = AiPasses.recent()
         if (passes.isEmpty()) {
-            out.line("no passes recorded since this app started — nothing has asked the model anything")
+            out.line("no requests recorded since this app started")
             return
         }
-
-        // Newest first, because the interesting pass is almost always the last one.
+        // Newest first, because the interesting request is almost always the last one.
         passes.take(PASSES_LISTED).forEach { pass ->
             out.line(
-                "  ${Clocks.shortTime(pass.atTs)}  ${pass.label.padEnd(17)}" +
-                    "${pass.tokens.toString().padStart(4)} tok  " +
-                    "${"%6.1f".format(pass.ms / 1000.0)}s  " +
-                    "${"%5.1f".format(pass.tokensPerSecond)} tok/s  " +
-                    (pass.stoppedBy?.let { "cut off by $it" } ?: "ran to its own stop") +
-                    (pass.reloadedBecause?.let { "; reloaded because $it" } ?: "; context reused"),
+                "  ${Clocks.shortTime(pass.atTs)}  ${pass.label}  ${pass.tokens} tok  " +
+                    "${"%.1f".format(pass.ms / 1000.0)}s",
             )
         }
-        if (passes.size > PASSES_LISTED) out.line("  (${passes.size - PASSES_LISTED} older passes not listed)")
-
-        val ms = passes.map { it.ms }.sorted()
-        val tokens = passes.sumOf { it.tokens }
+        val median = passes.map { it.ms }.sorted()[passes.size / 2]
         out.line(
-            "totals: ${passes.size} pass(es), ${tokens} token(s); " +
-                "median ${"%.1f".format(median(ms) / 1000.0)}s, " +
-                "slowest ${"%.1f".format(ms.last() / 1000.0)}s, " +
-                "fastest ${"%.1f".format(ms.first() / 1000.0)}s, " +
-                "total ${"%.1f".format(ms.sum() / 1000.0)}s of generation",
+            "totals: ${passes.size} request(s), ${passes.sumOf { it.tokens }} token(s); " +
+                "median ${"%.1f".format(median / 1000.0)}s",
         )
-        val byLabel = passes.groupBy { it.label }
-        byLabel.forEach { (label, group) ->
-            out.line(
-                "  $label: ${group.size}, median ${"%.1f".format(median(group.map { it.ms }.sorted()) / 1000.0)}s, " +
-                    "median ${median(group.map { it.tokens.toLong() }.sorted())} tokens",
-            )
-        }
-        val cut = passes.mapNotNull { it.stoppedBy }.groupingBy { it }.eachCount()
-        if (cut.isEmpty()) {
-            out.line("cut off: none — every pass stopped on its own")
-        } else {
-            cut.entries.sortedByDescending { it.value }.forEach { (why, count) ->
-                out.line("cut off by $why: $count")
-            }
-        }
-        val reloads = passes.count { it.reloadedBecause != null }
-        out.line("model reloads: $reloads of ${passes.size} passes")
     }
-
-    private suspend fun corrections(out: StringBuilder) {
-        out.section("CORRECTION BACKLOG")
-        val settings = ServiceLocator.settings
-        val pending = runCatching { CorrectionRunner.pendingCount().first() }.getOrNull()
-        out.line("lines waiting for a pass: ${pending?.toString() ?: "could not be read"}")
-        val last = runCatching { settings.lastCorrectionRun.first() }.getOrNull()
-        out.line(
-            "last completed run: " + (
-                last?.let {
-                    "${Clocks.dayAndTime(it.atTs)}, ${it.lines} line(s) in " +
-                        "${"%.1f".format(it.durationMs / 1000.0)}s"
-                } ?: "none recorded"
-                ),
-        )
-        CorrectionRunner.lastError?.let { out.line("last run's problem: $it") }
-        val enabled = runCatching { settings.endOfDayEnabled.first() }.getOrNull()
-        out.line(
-            "overnight pass enabled: " + when (enabled) {
-                true -> "yes"
-                false -> "no"
-                null -> "could not be read"
-            },
-        )
-        val taught = runCatching { ServiceLocator.database.review().recentCorrections(500).size }.getOrNull()
-        out.line("corrections the user has taught it: ${taught?.toString() ?: "could not be read"}")
-    }
-
-    // --- capture -------------------------------------------------------------------------
 
     private fun transcription(out: StringBuilder) {
         out.section("TRANSCRIPTION")

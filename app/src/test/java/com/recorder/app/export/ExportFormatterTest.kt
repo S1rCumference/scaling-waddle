@@ -2,10 +2,8 @@ package com.recorder.app.export
 
 import com.recorder.app.ui.LineView
 import com.recorder.core.storage.Clocks
-import com.recorder.core.storage.CorrectionPass
 import com.recorder.core.storage.DayKey
 import com.recorder.core.storage.ExportDefaults
-import com.recorder.core.storage.SegmentCorrection
 import com.recorder.core.storage.TranscriptSegment
 import java.util.TimeZone
 import org.junit.Assert.assertEquals
@@ -20,18 +18,9 @@ class ExportFormatterTest {
     private val zone = TimeZone.getTimeZone("UTC")
     private val day = DayKey.startOf(20260923, zone)
 
-    private fun line(minute: Int, original: String, corrected: String? = null): LineView {
+    private fun line(minute: Int, text: String): LineView {
         val ts = day + 14 * 3_600_000L + minute * 60_000L
-        val segment = TranscriptSegment(id = minute.toLong(), startTs = ts, endTs = ts + 2_000, text = original)
-        val correction = corrected?.let {
-            SegmentCorrection(
-                segmentId = segment.id,
-                text = it,
-                pass = CorrectionPass.END_OF_DAY,
-                engine = "Gemma 3 1B Instruct (Q4_K_M)",
-            )
-        }
-        return LineView(segment, correction)
+        return LineView(TranscriptSegment(id = minute.toLong(), startTs = ts, endTs = ts + 2_000, text = text))
     }
 
     /**
@@ -44,15 +33,14 @@ class ExportFormatterTest {
     }
 
     private val lines = listOf(
-        line(2, "go through my contacts", "go through my content"),
-        line(5, "see you tomorrow", "see you tomorrow"),
+        line(2, "go through my content"),
+        line(5, "see you tomorrow"),
     )
 
     private fun query(
         format: String = ExportDefaults.FORMAT_MARKDOWN,
-        content: String = ExportDefaults.CONTENT_CORRECTED,
         grouping: String = ExportGrouping.DAY,
-    ) = ExportQuery(format = format, content = content, grouping = grouping)
+    ) = ExportQuery(format = format, grouping = grouping)
 
     private fun render(
         q: ExportQuery,
@@ -69,7 +57,7 @@ class ExportFormatterTest {
         assertTrue("names the model", "Gemma 3 1B Instruct (Q4_K_M)" in md)
         assertTrue("## Wednesday 23 September 2026" in md)
         assertTrue("- **14:02:00** go through my content" in md)
-        assertFalse("corrected means corrected", "contacts" in md)
+        assertTrue("- **14:05:00** see you tomorrow" in md)
     }
 
     @Test
@@ -81,19 +69,12 @@ class ExportFormatterTest {
         assertTrue("the lines are still there", "- **14:02:00** go through my content" in flat)
     }
 
-    @Test
-    fun `both shows the original only under lines that changed`() {
-        val md = render(query(content = ExportDefaults.CONTENT_BOTH))
-        assertTrue("  - _original:_ go through my contacts" in md)
-        assertEquals(1, Regex("_original:_").findAll(md).count())
-    }
-
     // --- plain text -----------------------------------------------------------------------
 
     @Test
     fun `plain text uses brackets and no markdown punctuation`() {
-        val txt = render(query(format = ExportDefaults.FORMAT_TEXT, content = ExportDefaults.CONTENT_ORIGINAL))
-        assertTrue("[14:02:00] go through my contacts" in txt)
+        val txt = render(query(format = ExportDefaults.FORMAT_TEXT))
+        assertTrue("[14:02:00] go through my content" in txt)
         assertTrue("== Wednesday 23 September 2026 ==" in txt)
         assertFalse("#" in txt)
     }
@@ -101,7 +82,7 @@ class ExportFormatterTest {
     @Test
     fun `a twelve-hour export reads as a twelve-hour clock`() {
         Clocks.set(false)
-        val txt = render(query(format = ExportDefaults.FORMAT_TEXT, content = ExportDefaults.CONTENT_ORIGINAL))
+        val txt = render(query(format = ExportDefaults.FORMAT_TEXT))
         assertTrue("2:02:00" in txt)
         assertFalse("[14:02:00]" in txt)
     }
@@ -111,11 +92,11 @@ class ExportFormatterTest {
     @Test
     fun `csv has the declared header and one row per line`() {
         val csv = render(query(format = ExportDefaults.FORMAT_CSV)).trim().lines()
-        assertEquals("date,time,text,source,flagged", csv.first())
+        assertEquals("date,time,text,flagged", csv.first())
         assertEquals(ExportFormatter.CSV_HEADER, csv.first())
         assertEquals(3, csv.size)
-        assertEquals("2026-09-23,14:02:00,go through my content,corrected,false", csv[1])
-        assertEquals("2026-09-23,14:05:00,see you tomorrow,original,false", csv[2])
+        assertEquals("2026-09-23,14:02:00,go through my content,false", csv[1])
+        assertEquals("2026-09-23,14:05:00,see you tomorrow,false", csv[2])
     }
 
     @Test
@@ -135,18 +116,9 @@ class ExportFormatterTest {
     @Test
     fun `csv quotes commas, quotes and newlines rather than corrupting the row`() {
         val awkward = listOf(line(1, """he said "yes, of course" and left"""))
-        val csv = render(query(format = ExportDefaults.FORMAT_CSV, content = ExportDefaults.CONTENT_ORIGINAL), awkward)
+        val csv = render(query(format = ExportDefaults.FORMAT_CSV), awkward)
             .trim().lines()
-        assertEquals("""2026-09-23,14:01:00,"he said ""yes, of course"" and left",original,false""", csv[1])
-    }
-
-    @Test
-    fun `csv both writes the corrected row then the original row`() {
-        val csv = render(query(format = ExportDefaults.FORMAT_CSV, content = ExportDefaults.CONTENT_BOTH))
-            .trim().lines()
-        assertEquals(4, csv.size)
-        assertTrue(csv[1].contains("go through my content,corrected"))
-        assertTrue(csv[2].contains("go through my contacts,original"))
+        assertEquals("""2026-09-23,14:01:00,"he said ""yes, of course"" and left",false""", csv[1])
     }
 
     // --- json lines -----------------------------------------------------------------------
@@ -154,11 +126,10 @@ class ExportFormatterTest {
     @Test
     fun `json lines is one object per line with escaped text`() {
         val awkward = listOf(line(1, "he said \"yes\"\tthen left"))
-        val out = render(query(format = ExportDefaults.FORMAT_JSONL, content = ExportDefaults.CONTENT_ORIGINAL), awkward)
+        val out = render(query(format = ExportDefaults.FORMAT_JSONL), awkward)
         val row = out.trim()
         assertTrue(row.startsWith("{") && row.endsWith("}"))
         assertTrue("\"text\":\"he said \\\"yes\\\"\\tthen left\"" in row)
-        assertTrue("\"source\":\"original\"" in row)
         assertTrue("\"flagged\":false" in row)
         assertTrue("\"epochMs\":" in row)
     }

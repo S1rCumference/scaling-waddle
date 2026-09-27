@@ -28,14 +28,40 @@ class RecorderSettings(private val context: Context) {
     val recordingEnabled: Flow<Boolean> =
         context.dataStore.data.map { it[Keys.RECORDING_ENABLED] ?: true }
 
-    val activeProvider: Flow<String> =
-        context.dataStore.data.map { it[Keys.ACTIVE_PROVIDER] ?: "" }
+    // --- Summaries, the only thing that uses a model now -----------------------------------
+    //
+    // The key lives here, in the app's own preferences, entered by the user. Nothing is baked
+    // into the build, and a blank key means nothing is ever sent anywhere.
 
-    val providerEndpoint: Flow<String> =
-        context.dataStore.data.map { it[Keys.PROVIDER_ENDPOINT] ?: "" }
+    /** Which preset is selected, by [com.recorder.core.llm.cloud.CloudProvider] name. */
+    val summaryProvider: Flow<String> =
+        context.dataStore.data.map { it[Keys.SUMMARY_PROVIDER] ?: "" }
 
-    val providerModel: Flow<String> =
-        context.dataStore.data.map { it[Keys.PROVIDER_MODEL] ?: "" }
+    /** The base URL, overridable so a provider moving one does not need an app update. */
+    val summaryBaseUrl: Flow<String> =
+        context.dataStore.data.map { it[Keys.SUMMARY_BASE_URL] ?: "" }
+
+    val summaryModel: Flow<String> =
+        context.dataStore.data.map { it[Keys.SUMMARY_MODEL] ?: "" }
+
+    /** The user's own API key. Blank until they paste one, and blank means do nothing. */
+    val summaryApiKey: Flow<String> =
+        context.dataStore.data.map { it[Keys.SUMMARY_API_KEY] ?: "" }
+
+    /**
+     * Whether the scheduled passes run at all. Off by default: an app that starts sending text
+     * to a third party the moment it is installed would be indefensible, key or no key.
+     */
+    val summariesEnabled: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.SUMMARIES_ENABLED] ?: false }
+
+    /** When a rate limit says not to ask again before this, as epoch millis. */
+    val summaryBackoffUntil: Flow<Long> =
+        context.dataStore.data.map { it[Keys.SUMMARY_BACKOFF_UNTIL] ?: 0L }
+
+    /** Why summarising is stuck, for the one line Settings shows. Blank when it is fine. */
+    val summaryProblem: Flow<String> =
+        context.dataStore.data.map { it[Keys.SUMMARY_PROBLEM] ?: "" }
 
     val heavyTierEnabled: Flow<Boolean> =
         context.dataStore.data.map { it[Keys.HEAVY_TIER_ENABLED] ?: false }
@@ -107,8 +133,6 @@ class RecorderSettings(private val context: Context) {
         context.dataStore.data.map { it[Keys.ASK_MODEL] ?: ModelChoice.AUTO }
 
     /** [ExportDefaults] values. */
-    val exportContent: Flow<String> =
-        context.dataStore.data.map { it[Keys.EXPORT_CONTENT] ?: ExportDefaults.CONTENT_CORRECTED }
 
     val exportFormat: Flow<String> =
         context.dataStore.data.map { it[Keys.EXPORT_FORMAT] ?: ExportDefaults.FORMAT_MARKDOWN }
@@ -122,14 +146,39 @@ class RecorderSettings(private val context: Context) {
 
     suspend fun setEndOfDayEnabled(enabled: Boolean) = edit { it[Keys.END_OF_DAY_ENABLED] = enabled }
 
+    suspend fun setSummaryProvider(name: String, baseUrl: String, model: String) = edit {
+        it[Keys.SUMMARY_PROVIDER] = name
+        it[Keys.SUMMARY_BASE_URL] = baseUrl
+        it[Keys.SUMMARY_MODEL] = model
+    }
+
+    suspend fun setSummaryBaseUrl(url: String) = edit { it[Keys.SUMMARY_BASE_URL] = url.trim() }
+
+    suspend fun setSummaryModel(model: String) = edit { it[Keys.SUMMARY_MODEL] = model.trim() }
+
+    suspend fun setSummaryApiKey(key: String) = edit { it[Keys.SUMMARY_API_KEY] = key.trim() }
+
+    suspend fun setSummariesEnabled(enabled: Boolean) = edit {
+        it[Keys.SUMMARIES_ENABLED] = enabled
+        // Switching it on clears whatever stopped it last time: the user has presumably just
+        // fixed the thing the problem line was complaining about.
+        if (enabled) {
+            it[Keys.SUMMARY_PROBLEM] = ""
+            it[Keys.SUMMARY_BACKOFF_UNTIL] = 0L
+        }
+    }
+
+    suspend fun setSummaryBackoff(untilMs: Long) = edit { it[Keys.SUMMARY_BACKOFF_UNTIL] = untilMs }
+
+    suspend fun setSummaryProblem(problem: String) = edit { it[Keys.SUMMARY_PROBLEM] = problem }
+
     suspend fun setCorrectionEngine(engine: String) = edit { it[Keys.CORRECTION_ENGINE] = engine }
 
     suspend fun setCorrectionModel(choice: String) = edit { it[Keys.CORRECTION_MODEL] = choice }
 
     suspend fun setAskModel(choice: String) = edit { it[Keys.ASK_MODEL] = choice }
 
-    suspend fun setExportDefaults(content: String, format: String) = edit {
-        it[Keys.EXPORT_CONTENT] = content
+    suspend fun setExportDefaults(format: String) = edit {
         it[Keys.EXPORT_FORMAT] = format
     }
 
@@ -140,12 +189,6 @@ class RecorderSettings(private val context: Context) {
     }
 
     suspend fun setRecordingEnabled(enabled: Boolean) = edit { it[Keys.RECORDING_ENABLED] = enabled }
-
-    suspend fun setProvider(name: String, endpoint: String, model: String) = edit {
-        it[Keys.ACTIVE_PROVIDER] = name
-        it[Keys.PROVIDER_ENDPOINT] = endpoint
-        it[Keys.PROVIDER_MODEL] = model
-    }
 
     suspend fun setHeavyTierEnabled(enabled: Boolean) = edit { it[Keys.HEAVY_TIER_ENABLED] = enabled }
 
@@ -215,7 +258,6 @@ class RecorderSettings(private val context: Context) {
         include: String,
         exclude: String,
         includeAll: Boolean,
-        content: String,
         format: String,
         grouping: String,
         destination: String,
@@ -228,7 +270,6 @@ class RecorderSettings(private val context: Context) {
         it[Keys.EXPORT_INCLUDE] = include
         it[Keys.EXPORT_EXCLUDE] = exclude
         it[Keys.EXPORT_INCLUDE_ALL] = includeAll
-        it[Keys.EXPORT_CONTENT] = content
         it[Keys.EXPORT_FORMAT] = format
         it[Keys.EXPORT_GROUPING] = grouping
         it[Keys.EXPORT_DESTINATION] = destination
@@ -256,9 +297,13 @@ class RecorderSettings(private val context: Context) {
     private object Keys {
         val TRIGGERS: Preferences.Key<Set<String>> = stringSetPreferencesKey("trigger_keywords")
         val RECORDING_ENABLED = booleanPreferencesKey("recording_enabled")
-        val ACTIVE_PROVIDER = stringPreferencesKey("active_provider")
-        val PROVIDER_ENDPOINT = stringPreferencesKey("provider_endpoint")
-        val PROVIDER_MODEL = stringPreferencesKey("provider_model")
+        val SUMMARY_PROVIDER = stringPreferencesKey("summary_provider")
+        val SUMMARY_BASE_URL = stringPreferencesKey("summary_base_url")
+        val SUMMARY_MODEL = stringPreferencesKey("summary_model")
+        val SUMMARY_API_KEY = stringPreferencesKey("summary_api_key")
+        val SUMMARIES_ENABLED = booleanPreferencesKey("summaries_enabled")
+        val SUMMARY_BACKOFF_UNTIL = longPreferencesKey("summary_backoff_until")
+        val SUMMARY_PROBLEM = stringPreferencesKey("summary_problem")
         val HEAVY_TIER_ENABLED = booleanPreferencesKey("heavy_tier_enabled")
         val SETUP_COMPLETE = booleanPreferencesKey("setup_complete")
         val ALLOW_METERED = booleanPreferencesKey("allow_metered_downloads")
@@ -324,16 +369,12 @@ object ModelChoice {
 }
 
 object ExportDefaults {
-    const val CONTENT_ORIGINAL = "original"
-    const val CONTENT_CORRECTED = "corrected"
-    const val CONTENT_BOTH = "both"
     const val FORMAT_MARKDOWN = "markdown"
     const val FORMAT_TEXT = "text"
     const val FORMAT_CSV = "csv"
     const val FORMAT_JSONL = "jsonl"
 
     val formats = listOf(FORMAT_MARKDOWN, FORMAT_TEXT, FORMAT_CSV, FORMAT_JSONL)
-    val contents = listOf(CONTENT_CORRECTED, CONTENT_ORIGINAL, CONTENT_BOTH)
 
     fun formatLabel(value: String): String = when (value) {
         FORMAT_MARKDOWN -> "Markdown"
@@ -342,11 +383,6 @@ object ExportDefaults {
         else -> "JSON Lines"
     }
 
-    fun contentLabel(value: String): String = when (value) {
-        CONTENT_ORIGINAL -> "Original"
-        CONTENT_BOTH -> "Both"
-        else -> "Corrected"
-    }
 }
 
 /** Where an export goes. Stored, so the last choice is the next default. */
