@@ -33,7 +33,6 @@ import com.recorder.app.models.InstallProgress
 import com.recorder.app.service.RecordingService
 import com.recorder.core.llm.cloud.CloudProvider
 import com.recorder.app.summary.SummaryWorker
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.recorder.core.storage.Clocks
 import com.recorder.core.storage.DiagnosticEntry
 import com.recorder.core.storage.ExportDefaults
@@ -504,6 +503,54 @@ private fun ModelsSection(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
 }
 
 /**
+ * Whether what is on disk is actually complete, and the one button that fixes it when it is
+ * not. "Installed" here means the exact byte count the manifest gives, or, for the speech
+ * model's unpacked archive, an install record written after the last file was in place — not
+ * "a file of that name exists", which is true of a download that stopped one byte in and is
+ * how a half-installed speech model took the whole app down on every launch.
+ */
+@Composable
+private fun ModelFileCheck(viewModel: RecorderViewModel) {
+    val repaired by viewModel.repairReport.collectAsState()
+    var survey by remember { mutableStateOf<List<Pair<String, String?>>?>(null) }
+
+    Text(
+        "Model files",
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier.padding(top = 10.dp),
+    )
+    Row {
+        TextButton(onClick = { survey = viewModel.modelSurvey() }) { Text("Check files") }
+        TextButton(onClick = viewModel::repairModels) { Text("Remove unfinished") }
+    }
+    // 4.0 dropped the language model entirely. An install over the top leaves its 768 MB of
+    // weights behind, and nothing in the catalogue points at them any more, so they are offered
+    // for removal rather than left to be found.
+    val stray = remember(repaired) { viewModel.strayModels() }
+    stray?.let { line ->
+        Text(line, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
+        TextButton(onClick = viewModel::removeStrayModels) { Text("Remove them") }
+    }
+    survey?.let { rows ->
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(8.dp)) {
+                rows.forEach { (name, problem) ->
+                    Text(
+                        "$name — ${problem ?: "complete"}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (problem == null) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+    }
+    repaired?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+    }
+}
+
+/**
  * Where summaries are sent, and the key that lets them be.
  *
  * This card is the whole of the AI surface now. What it replaced was three: a model card listing
@@ -539,11 +586,9 @@ private fun SummariesSection(viewModel: RecorderViewModel) {
 
     Choice(
         label = "Provider",
-        options = CloudProvider.entries.map { it.label },
-        selected = provider.label,
-        onSelect = { label ->
-            CloudProvider.entries.firstOrNull { it.label == label }?.let(viewModel::setSummaryProvider)
-        },
+        options = CloudProvider.entries.map { it.label to it },
+        selected = provider,
+        onSelect = viewModel::setSummaryProvider,
     )
     Text(provider.freeTier, style = MaterialTheme.typography.bodySmall)
     Text(

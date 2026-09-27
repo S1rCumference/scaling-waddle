@@ -505,6 +505,95 @@ private fun Lines(viewModel: RecorderViewModel, modifier: Modifier) {
     }
 }
 
+/**
+ * The one confirmation in the app.
+ *
+ * Deleting is real — the lines, their corrections and their flags all go — so it asks once,
+ * and says how many. Undo still exists afterwards, from the status line, but only while the
+ * app is running: this is the sentence that has to be right.
+ */
+@Composable
+private fun ConfirmDelete(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (count == 1) "Delete this line?" else "Delete $count lines?") },
+        text = {
+            Text(
+                "They are removed for good, along with their keyword flags. " +
+                    "Undo is offered for a moment afterwards.",
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("Delete", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Keep") } },
+    )
+}
+
+
+/**
+ * What this group was about: the name, and a paragraph under it.
+ *
+ * The date is already the heading above, so this is the other two thirds of what was asked
+ * for — the name and the context. Collapsed to the name after the first read, because on the
+ * cover screen the paragraph is most of the screen and the name is what you came for.
+ */
+@Composable
+private fun GroupTopic(viewModel: RecorderViewModel, group: GroupRef) {
+    val compact = LocalCompact.current
+    val summary by viewModel.openGroupSummary.collectAsState()
+    val progress by viewModel.summaryProgress.collectAsState()
+    var expanded by remember(group.id) { mutableStateOf(!compact) }
+    val current = summary
+
+    if (current == null) {
+        // Said rather than implied. A group with no summary and no explanation reads like a
+        // feature that is broken rather than one that has not run yet.
+        if (viewModel.canSummarise(group)) {
+            Text(
+                progress ?: "No summary yet — the overnight pass writes one, or press Summarise.",
+                color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.outline,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(vertical = 2.dp),
+            )
+        }
+        return
+    }
+
+    val body = current.body
+    Column(
+        Modifier.fillMaxWidth()
+            .clickable(enabled = body.isNotBlank()) { expanded = !expanded }
+            .padding(vertical = 4.dp),
+    ) {
+        if (current.title.isNotBlank()) {
+            Text(
+                current.title,
+                color = if (compact) CoverColors.live else MaterialTheme.colorScheme.primary,
+                style = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
+            )
+        }
+        if (body.isNotBlank()) {
+            Text(
+                body,
+                color = if (compact) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = if (compact) 13.sp else 15.sp,
+                maxLines = if (expanded) Int.MAX_VALUE else 2,
+            )
+        }
+        progress?.let {
+            Text(
+                it,
+                color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.outline,
+                fontSize = 11.sp,
+            )
+        }
+    }
+}
+
+
 /** A one-line note in the list, for a gesture that would otherwise never be found. */
 @Composable
 private fun Hint(text: String) {
