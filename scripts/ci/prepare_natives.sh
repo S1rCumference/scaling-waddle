@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# prepare_natives.sh — put both native runtimes in place before Gradle configures.
+# prepare_natives.sh — put the native runtime in place before Gradle configures.
 #
-# Must run BEFORE ./gradlew, because core-asr and core-llm decide at configuration time
-# whether their optional source sets compile, based on what is in their libs/ directories.
+# Must run BEFORE ./gradlew, because core-asr decides at configuration time whether its
+# optional source set compiles, based on what is in its libs/ directory.
 #
 # Idempotent: if an artifact is already present (restored from cache, or fetched by a
 # previous run) it is left alone.
@@ -20,18 +20,8 @@ SHERPA_VERSION="${SHERPA_VERSION:-1.13.8}"
 SHERPA_AAR="sherpa-onnx-static-link-onnxruntime-${SHERPA_VERSION}.aar"
 SHERPA_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VERSION}/${SHERPA_AAR}"
 
-# llama.cpp's Android library lives in examples/llama.android and is not published
-# anywhere, so we build it. Pinned because that example was rewritten wholesale once
-# already (it is now ARM's "AiChat" wrapper) and its Kotlin API moves with it.
-LLAMA_COMMIT="${LLAMA_COMMIT:-fee39dd92673ba0c08c8da96040ce53368b35188}"
-LLAMA_REPO="https://github.com/ggml-org/llama.cpp"
-
 ABI="arm64-v8a"
-# Lowest API the llama.android wrapper can actually be built for; see Patch 1 below.
-# Must stay in step with LocalModelRuntime.MIN_SDK.
-LLAMA_MIN_SDK=30
 SHERPA_DEST="core-asr/libs/${SHERPA_AAR}"
-LLAMA_DEST="core-llm/libs/llama-release.aar"
 
 log() { printf '\n== %s\n' "$*"; }
 
@@ -53,125 +43,7 @@ if unzip -l "$SHERPA_DEST" | grep -q "jni/${ABI}/libonnxruntime.so"; then
 fi
 echo "sherpa-onnx: $(du -h "$SHERPA_DEST" | cut -f1) at $SHERPA_DEST"
 
-# --- llama.cpp -----------------------------------------------------------------
-if [ -f "$LLAMA_DEST" ]; then
-  log "llama.cpp AAR already present (cached)"
-  echo "llama.cpp: $(du -h "$LLAMA_DEST" | cut -f1) at $LLAMA_DEST"
-  exit 0
-fi
-
-: "${ANDROID_HOME:?ANDROID_HOME must be set to build the llama.cpp AAR}"
-# The runner installs cmdline-tools under a version directory, not always "latest".
-SDKMANAGER="$(
-  ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1
-)"
-[ -x "${SDKMANAGER:-}" ] || SDKMANAGER="$(command -v sdkmanager || true)"
-[ -x "${SDKMANAGER:-}" ] || { echo "ERROR: sdkmanager not found under $ANDROID_HOME" >&2; exit 1; }
-echo "sdkmanager: $SDKMANAGER"
-
-# Note: no "yes |" here. Licenses are already accepted by the CI setup step, and piping
-# yes into sdkmanager makes it exit on SIGPIPE, which under pipefail looks exactly like a
-# failed install even when the package installed fine.
-sdk_install() {
-  local pkg="$1" out
-  out="$(mktemp)"
-  echo "  installing $pkg"
-  if "$SDKMANAGER" --install "$pkg" </dev/null >"$out" 2>&1; then
-    rm -f "$out"
-    return 0
-  fi
-  echo "  sdkmanager exited non-zero for $pkg" >&2
-  tail -20 "$out" >&2
-  rm -f "$out"
-  return 1
-}
-
-# Newest locally installed component of a kind, e.g. newest_local ndk -> "29.0.13113456".
-newest_local() {
-  ls -1 "$ANDROID_HOME/$1" 2>/dev/null | sort -V | tail -1
-}
-
-log "Resolving NDK and CMake"
-# Prefer whatever the runner image already ships: the pinned versions are a multi-hundred
-# megabyte download, and llama.cpp is not fussy about the exact toolchain.
-NDK_VERSION="$(newest_local ndk)"
-if [ -z "$NDK_VERSION" ]; then
-  sdk_install "ndk;29.0.13113456" || true
-  NDK_VERSION="$(newest_local ndk)"
-fi
-[ -n "$NDK_VERSION" ] || { echo "ERROR: no NDK available and none could be installed" >&2; exit 1; }
-echo "  NDK: $NDK_VERSION"
-
-CMAKE_VERSION="$(newest_local cmake)"
-if [ -z "$CMAKE_VERSION" ]; then
-  sdk_install "cmake;3.31.6" || true
-  CMAKE_VERSION="$(newest_local cmake)"
-fi
-echo "  CMake: ${CMAKE_VERSION:-none installed, will use PATH}"
-
-# llama.android compiles against API 36. Judge this on the directory existing rather than
-# on sdkmanager's exit code, which is not reliable.
-if [ ! -d "$ANDROID_HOME/platforms/android-36" ]; then
-  sdk_install "platforms;android-36" || true
-fi
-[ -d "$ANDROID_HOME/platforms/android-36" ] || {
-  echo "ERROR: platforms;android-36 is not installed and could not be fetched." >&2
-  exit 1
-}
-echo "  platform: android-36"
-
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
-
-log "Fetching llama.cpp @ ${LLAMA_COMMIT:0:12}"
-git -C "$WORK" init -q
-git -C "$WORK" remote add origin "$LLAMA_REPO"
-git -C "$WORK" fetch -q --depth 1 origin "$LLAMA_COMMIT"
-git -C "$WORK" checkout -q FETCH_HEAD
-
-ANDROID_DIR="$WORK/examples/llama.android"
-[ -d "$ANDROID_DIR" ] || { echo "ERROR: examples/llama.android missing at this commit" >&2; exit 1; }
-
-LIB_GRADLE="$ANDROID_DIR/lib/build.gradle.kts"
-
-# Patch 1: minSdk. Upstream sets 33, but the real constraint is API 30: their
-# src/main/cpp/logging.h calls __android_log_is_loggable, which was introduced in
-# Android 30. Anything lower fails to compile with exactly that error.
-#
-# The app itself stays on minSdk 26 and declares tools:overrideLibrary for this AAR, so
-# recording and transcription still reach Android 8 phones; only the local LLM is gated
-# to Android 11+ (see LocalModelRuntime.available).
-sed -i "s/^\( *\)minSdk = 33$/\1minSdk = $LLAMA_MIN_SDK/" "$LIB_GRADLE"
-
-# Patch 2: drop x86_64. We ship arm64 only, and the native build is the slow part.
-sed -i "s/abiFilters += listOf(\"arm64-v8a\", \"x86_64\")/abiFilters += listOf(\"$ABI\")/" "$LIB_GRADLE"
-
-# Patch 3: point the toolchain pins at what this machine actually has, rather than
-# downloading upstream's exact versions.
-sed -i "s/^\( *\)ndkVersion = \".*\"$/\1ndkVersion = \"$NDK_VERSION\"/" "$LIB_GRADLE"
-if [ -n "$CMAKE_VERSION" ]; then
-  sed -i "s/version = \"3\.31\.6\"/version = \"$CMAKE_VERSION\"/" "$LIB_GRADLE"
-else
-  sed -i '/version = "3.31.6"/d' "$LIB_GRADLE"
-fi
-
-echo "--- patched lib/build.gradle.kts ---"
-grep -nE 'minSdk|abiFilters|ndkVersion|version = "3' "$LIB_GRADLE" || true
-
-# Verify the patches actually applied; a silent sed miss would mean a 33-minSdk AAR that
-# fails much later with a confusing manifest-merger error.
-grep -q "minSdk = $LLAMA_MIN_SDK" "$LIB_GRADLE" ||
-  { echo "ERROR: minSdk patch did not apply" >&2; exit 1; }
-grep -q "abiFilters += listOf(\"$ABI\")" "$LIB_GRADLE" ||
-  { echo "ERROR: abiFilters patch did not apply" >&2; exit 1; }
-
-log "Building :lib:assembleRelease (native build, this is the slow step)"
-( cd "$ANDROID_DIR" && chmod +x gradlew && ./gradlew --no-daemon :lib:assembleRelease )
-
-BUILT="$ANDROID_DIR/lib/build/outputs/aar/lib-release.aar"
-[ -f "$BUILT" ] || { echo "ERROR: expected AAR at $BUILT" >&2; ls -R "$ANDROID_DIR/lib/build/outputs" >&2 || true; exit 1; }
-
-mkdir -p core-llm/libs
-cp "$BUILT" "$LLAMA_DEST"
-echo "llama.cpp: $(du -h "$LLAMA_DEST" | cut -f1) at $LLAMA_DEST"
-unzip -l "$LLAMA_DEST" | grep -E '\.so$' || true
+# There is no llama.cpp here any more. It used to be built from source at a pinned commit —
+# a full NDK build, several minutes of every CI run — for a language model that ran at about
+# eight tokens a second and could not do the job. Summaries come from a hosted endpoint now, so
+# this script has one runtime to place.

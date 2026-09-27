@@ -62,7 +62,7 @@ fun SetupWizard(
 
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             when (step) {
-                SetupStep.WELCOME -> WelcomeStep(viewModel)
+                SetupStep.WELCOME -> WelcomeStep()
                 SetupStep.PERMISSIONS -> PermissionsStep()
                 SetupStep.MODELS -> ModelsStep(viewModel)
                 SetupStep.COVER_SCREEN -> CoverScreenStep()
@@ -96,7 +96,7 @@ fun SetupWizard(
 }
 
 @Composable
-private fun WelcomeStep(viewModel: SetupViewModel) {
+private fun WelcomeStep() {
     Heading("This phone listens, and keeps it to itself")
     Body(
         "It records continuously, writes down what it hears, and flags the things you tell " +

@@ -29,8 +29,8 @@ object ExportFormatter {
         exportedAt: Long = System.currentTimeMillis(),
         zone: TimeZone = TimeZone.getDefault(),
     ): String = when (query.format) {
-        ExportDefaults.FORMAT_CSV -> csv(lines, query, flaggedIds, zone)
-        ExportDefaults.FORMAT_JSONL -> jsonl(lines, query, flaggedIds, zone)
+        ExportDefaults.FORMAT_CSV -> csv(lines, flaggedIds, zone)
+        ExportDefaults.FORMAT_JSONL -> jsonl(lines, flaggedIds, zone)
         else -> prose(title, lines, query, exportedAt, zone)
     }
 
@@ -137,7 +137,7 @@ object ExportFormatter {
 
     // --- machine formats -----------------------------------------------------------------
 
-    private fun csv(lines: List<LineView>, query: ExportQuery, flagged: Set<Long>, zone: TimeZone): String {
+    private fun csv(lines: List<LineView>, flagged: Set<Long>, zone: TimeZone): String {
         val date = fmt("yyyy-MM-dd", zone)
         val clock = fmt("HH:mm:ss", zone)
         return buildString {
@@ -152,7 +152,7 @@ object ExportFormatter {
         }
     }
 
-    private fun jsonl(lines: List<LineView>, query: ExportQuery, flagged: Set<Long>, zone: TimeZone): String {
+    private fun jsonl(lines: List<LineView>, flagged: Set<Long>, zone: TimeZone): String {
         val iso = fmt("yyyy-MM-dd'T'HH:mm:ssXXX", zone)
         return buildString {
             for (line in lines) {

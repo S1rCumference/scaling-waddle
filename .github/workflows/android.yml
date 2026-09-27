@@ -11,7 +11,6 @@ env:
   # Keep in step with scripts/ci/prepare_natives.sh; exported here so the cache key and
   # the BuildConfig stamp both see the same pin.
   SHERPA_VERSION: "1.13.8"
-  LLAMA_COMMIT: "fee39dd92673ba0c08c8da96040ce53368b35188"
 
 jobs:
   build:
@@ -31,14 +30,6 @@ jobs:
           # v3's default is "tools platform-tools", and the obsolete "tools" package was
           # removed from the SDK repository, which makes the action itself fail.
           packages: platform-tools
-
-      # The llama.cpp AAR takes a full NDK build, so it is cached on its commit rather
-      # than rebuilt every push.
-      - name: Cache llama.cpp AAR
-        uses: actions/cache@v4
-        with:
-          path: core-llm/libs/llama-release.aar
-          key: llama-aar-${{ env.LLAMA_COMMIT }}-arm64-v1
 
       - name: Cache sherpa-onnx AAR
         uses: actions/cache@v4
@@ -64,14 +55,14 @@ jobs:
       # A green build is not proof the runtimes survived packaging: the ABI excludes that
       # resolve the duplicate libonnxruntime.so could just as easily drop too much, and
       # the failure mode on the phone is a silent "no transcription".
-      - name: Verify the APK carries both native runtimes
+      - name: Verify the APK carries the speech runtime
         run: |
           APK="$(ls app/build/outputs/apk/razr/debug/*.apk | head -1)"
           echo "APK: $APK ($(du -h "$APK" | cut -f1))"
           LIBS="$(unzip -l "$APK" | grep -oE 'lib/[^/]+/[^ ]+\.so' | sort -u)"
           echo "$LIBS"
 
-          for required in libsherpa-onnx-jni.so libonnxruntime.so libllama.so libai-chat.so; do
+          for required in libsherpa-onnx-jni.so libonnxruntime.so; do
             echo "$LIBS" | grep -q "/$required$" || {
               echo "::error::$required is missing from the APK"
               exit 1
@@ -83,13 +74,11 @@ jobs:
             echo "::error::non-arm64 native libraries were packaged: $OTHER"
             exit 1
           fi
-          echo "OK: both runtimes present, arm64 only"
+          echo "OK: speech runtime present, arm64 only"
 
       # Separate from the list above on purpose: that one asks "is the library in the APK",
-      # this one asks "will it work once installed". llama.cpp loads its CPU kernels by
-      # scanning the on-disk native library directory, so an APK that never extracts them
-      # passes every check above and then fails to load every single model.
-      - name: Verify the APK can run the local models
+      # this one asks "will it work once installed".
+      - name: Verify the APK can run
         run: ./scripts/ci/verify_apk.sh "$(ls app/build/outputs/apk/razr/debug/*.apk | head -1)"
 
       - name: Upload razr APK
@@ -163,12 +152,6 @@ jobs:
           # removed from the SDK repository, which makes the action itself fail.
           packages: platform-tools
 
-      - name: Cache llama.cpp AAR
-        uses: actions/cache@v4
-        with:
-          path: core-llm/libs/llama-release.aar
-          key: llama-aar-${{ env.LLAMA_COMMIT }}-arm64-v1
-
       - name: Cache sherpa-onnx AAR
         uses: actions/cache@v4
         with:
@@ -224,7 +207,7 @@ jobs:
           cd dist && sha256sum *.apk > SHA256SUMS && cat SHA256SUMS
           echo "prefix=$PREFIX" >> "$GITHUB_OUTPUT"
 
-      - name: Verify the APKs can run the local models
+      - name: Verify the APKs can run
         run: |
           for apk in dist/*.apk; do ./scripts/ci/verify_apk.sh "$apk"; done
 

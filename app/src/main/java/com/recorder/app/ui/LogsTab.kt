@@ -59,7 +59,6 @@ fun LogsTab(viewModel: RecorderViewModel) {
 private fun GroupList(viewModel: RecorderViewModel) {
     val compact = LocalCompact.current
     val hours by viewModel.recentHours.collectAsState()
-    val days by viewModel.days.collectAsState()
     val months by viewModel.months.collectAsState()
     val openDay by viewModel.openDay.collectAsState()
     val openDayHours by viewModel.openDayHours.collectAsState()
@@ -156,7 +155,7 @@ private fun GroupList(viewModel: RecorderViewModel) {
                 }
                 if (!expanded) return@forEach
 
-                month.days.forEach { day ->
+                month.days.forEach dayLoop@{ day ->
                     val dayOpen = openDay == day.dayKey
                     item(key = "d${day.dayKey}") {
                         val span = "${Clocks.shortTime(day.firstTs)}–" +
@@ -170,7 +169,7 @@ private fun GroupList(viewModel: RecorderViewModel) {
                             onDelete = { pendingDelete = GroupRef.day(day.dayKey) },
                         ) { viewModel.openDay(day.dayKey) }
                     }
-                    if (!dayOpen) return@forEach
+                    if (!dayOpen) return@dayLoop
 
                     if (openDayHours.isEmpty()) {
                         item(key = "dl${day.dayKey}") {

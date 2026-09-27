@@ -43,16 +43,15 @@ Expected: both rows show ✓, and a "Recorder / Listening" notification appears.
 ## 3. Models
 
 1. **Next** to the models step.
-2. It should preselect **Parakeet TDT** (required), **Silero VAD** (required) and
-   **Qwen 3 1.7B** (all day) and **Qwen 3 4B** (charging only). Untick Qwen 3 4B for a
-   faster first run; it is 2.5 GB and only used while plugged in.
+2. There are two, both required: **Silero VAD** (2 MB) and **Parakeet TDT** (460 MB). Nothing to
+   choose — there is no language model to download any more.
 3. **Download**.
 
-Expected: progress per model, then "Installed" on each. About 460 MB for the required two.
+Expected: progress per model, then "Installed" on each. About 460 MB in total.
 
 - **"Waiting for Wi-Fi"** with Wi-Fi connected → the network is metered; tap *Use mobile data
   anyway* or change the Wi-Fi's metered setting.
-- **Checksum did not match** → report it. Both required models have verified digests, so this
+- **Checksum did not match** → report it. Both models have verified digests, so this
   means the download was corrupted or the source changed.
 - **Stalls** → back out and re-enter the step; it resumes rather than restarting.
 
@@ -89,22 +88,28 @@ search for its text finds nothing.
 In **Logs**, long-press a line to select it, tap two more, then **Delete 3**. Expected: one
 confirmation naming the count, then the three lines gone.
 
-## 5. Correction, summaries and export
+## 5. Summaries and export
 
-1. Open a group in **Logs** → **Correct**.
+Summaries need a key. Skip to step 3 if you have not set one up — everything else in this
+document works without it.
 
-Expected: a progress line with a Cancel button, then a count of corrected lines. Switch the
-group to **Corrected** or **Both** to see them; the original is always kept.
+1. **Settings → Summaries.** Pick a provider, follow its link, paste a key, press **Save key**.
+   Then **Summarise now**.
 
-2. Still in that group → **Summarise**.
+Expected: a progress line, then "Wrote n summary(ies)". If instead it says the provider rejected
+the key, or refused the request, that is the provider talking — check the key and the model name
+on the same screen. If it says rate limited, that is also the provider talking, and it will say
+when it will try again.
 
-Expected: a progress line, then a short name above the lines with a couple of sentences under
-it. Go back to **All logs**: that hour's row now carries the name. Then open **The whole day**
-and press **Summarise** — it summarises whichever hours have no name yet, then the day from
-those names, so it takes longer the first time and is one short call after that.
+2. Open an hour in **Logs → Summarise**.
 
-Read the paragraph against what you actually said. The one failure that matters is a summary
-that asserts something was decided or agreed when it was not; if you see that, it is a bug worth
+Expected: a short name above the lines with a couple of sentences under it. Go back to
+**All logs**: that hour's row now carries the name. Then open **The whole day** and press
+**Summarise** — it summarises whichever hours have no name yet, then the day from those names, so
+it takes longer the first time and is one short request after that.
+
+Read the paragraph against what you actually said. The one failure that matters is a summary that
+asserts something was decided or agreed when it was not; if you see that, it is a bug worth
 reporting with the hour's transcript, not a rough edge.
 
 3. **Logs → Export** → Today → Markdown → Copy to clipboard.
@@ -112,9 +117,24 @@ reporting with the hour's transcript, not a rough edge.
 Expected: a match count and size above the button, and text on the clipboard with a heading per
 day and a timestamp per line. Exporting one day should be one day of lines, not two.
 
-**Airplane mode on, then do both again.** They must still work — that is the whole point. There
-is no cloud path in 3.0 at all, so a failure that only happens with the radio off would mean
-something is reaching the network that should not be.
+**Airplane mode on.** Recording, transcription, the log, delete and export must all still work —
+that is the point of the app. Summarising will not, and should say so rather than hanging: it is
+the one thing that needs a network.
+
+## 5a. Stop actually stopping
+
+This was broken until 4.0 — opening the app turned recording back on a few seconds after Stop —
+so it is worth proving rather than assuming.
+
+1. **Live → Stop.** The status should go to "stopped" and the notification should go away.
+2. Leave the app (home button), come back. It must still be stopped.
+3. Fold the phone, look at the cover screen, unfold. Still stopped.
+4. Lock the screen, wait a minute, unlock. Still stopped.
+5. **Settings → Recording**, toggle recording back on. It should start, and the notification
+   should return.
+
+If it restarts on its own at any of steps 2 to 4, that is the old bug and worth reporting with
+which step did it.
 
 ## 6. Cover screen
 
@@ -166,14 +186,18 @@ the resume notification. To avoid waiting, open the app — it starts immediatel
 Fill the README table from it. The numbers that matter most:
 
 - **Decoder duty cycle** — above a few percent means the VAD is opening on noise.
-- **Model loads / unloads** — a high count means the chat model is thrashing.
 - **Speech as share of uptime** — sanity check; 5–15% is typical for a working day.
 
-## 9. Benchmark
+## 9. Summaries over a day (optional)
 
-Settings → **Run benchmark**. Fill the README table. Then, if you want the bigger model on this
-12 GB phone, check the charging-only model: plug the phone in, then Settings → Run benchmark
-again. It should pick Qwen 3 4B while charging and the 1.7B on battery.
+If you set a key up, leave it a day and then check **Settings → Data → Self-diagnostic report**.
+
+The SUMMARIES section says which provider, whether the key is set, whether the schedule is on,
+how many summaries are stored, how many spans are still waiting, and what the last requests cost.
+"Spans waiting" going down over a day is the pass working. It going up while the number stored
+stays put means something is refusing the requests, and the problem line says what.
+
+Then open **Logs** and scroll: the rows should be carrying names. That is the whole feature.
 
 ## 10. Lockdown (optional, device owner only)
 

@@ -106,16 +106,35 @@ class SummaryPromptTest {
     }
 
     @Test
-    fun `an hour is prompted with its lines and a day with its hours' summaries`() {
+    fun `each level is told what its source is, one level down`() {
+        // The chain is the whole design: an hour reads transcript, and every wider level reads
+        // the level below it rather than the transcript again.
         val hour = SummaryPrompt.build(SummaryLevel.HOUR, "Tuesday, 14:00 to 15:00", listOf("a", "b"))
         assertTrue(hour.contains("what was transcribed"))
         assertTrue(hour.contains("Tuesday, 14:00 to 15:00"))
 
-        val day = SummaryPrompt.build(SummaryLevel.DAY, "the whole of Tue 3 Mar", listOf("a", "b"))
-        assertTrue(day.contains("summaries of each hour"))
+        assertTrue(
+            SummaryPrompt.build(SummaryLevel.DAY, "the whole of Tue 3 Mar", listOf("a", "b"))
+                .contains("summaries of each hour"),
+        )
+        assertTrue(
+            SummaryPrompt.build(SummaryLevel.WEEK, "the week beginning Mon 2 Mar", listOf("a", "b"))
+                .contains("summaries of each day"),
+        )
+        assertTrue(
+            SummaryPrompt.build(SummaryLevel.MONTH, "the whole of March 2026", listOf("a"))
+                .contains("summaries of each week"),
+        )
+    }
 
-        val month = SummaryPrompt.build(SummaryLevel.MONTH, "the whole of March 2026", listOf("a"))
-        assertTrue(month.contains("summaries of each day"))
+    @Test
+    fun `the roll-up chain has no gaps`() {
+        // Every level's partLabel must be the level below's own label, or a level would be built
+        // from something that is never produced.
+        assertEquals("line", SummaryLevel.HOUR.partLabel)
+        assertEquals(SummaryLevel.HOUR.label, SummaryLevel.DAY.partLabel)
+        assertEquals(SummaryLevel.DAY.label, SummaryLevel.WEEK.partLabel)
+        assertEquals(SummaryLevel.WEEK.label, SummaryLevel.MONTH.partLabel)
     }
 
     @Test
@@ -127,8 +146,9 @@ class SummaryPromptTest {
     @Test
     fun `only the hour level reads raw transcript`() {
         assertFalse(SummaryLevel.HOUR.sourceIsSummaries)
-        assertTrue(SummaryLevel.DAY.sourceIsSummaries)
-        assertTrue(SummaryLevel.MONTH.sourceIsSummaries)
+        SummaryLevel.entries.filter { it != SummaryLevel.HOUR }.forEach {
+            assertTrue("$it must roll up", it.sourceIsSummaries)
+        }
     }
 
     @Test
