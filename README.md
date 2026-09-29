@@ -33,8 +33,14 @@ sends nothing anywhere except to fetch its own models and updates from GitHub.
 
 ## What it is
 
-- **Record** continuously, through folds, reboots and app kills.
-- **Transcribe** on the device with Parakeet TDT 0.6B, gated by Silero voice detection.
+- **Record** continuously, through folds, reboots and app kills — or only inside a weekly
+  schedule you set (Settings → Recording → Schedule). Outside it the microphone and models are
+  fully released and an exact alarm brings them back at the next start.
+- **Transcribe** on the device with Parakeet TDT 0.6B v3, gated by Silero voice detection.
+  Russian and English (and 23 other European languages) are detected per sentence; there is no
+  language setting.
+- **Back up** every day to `Download/Recorder/Backup/`, one JSON Lines file per day, and restore
+  from those files. On by default; deletes are carried into the backup at the next run.
 - **Read** the result as a calendar: recent hours flat, older days and months rolled up.
 - **Name** each stretch of time, if you want that: what an hour, day, week or month was about.
 - **Flag** lines matching your trigger phrases.
@@ -135,7 +141,7 @@ See [docs/MODELS.md](docs/MODELS.md).
 | Model | Role | Size | Licence |
 |---|---|---|---|
 | Silero VAD v6.2.3 | voice detection | 2 MB | MIT |
-| Parakeet TDT 0.6B v2 INT8 | speech recognition | 460 MB | CC-BY-4.0 |
+| Parakeet TDT 0.6B v3 INT8 | speech recognition | 465 MB | CC-BY-4.0 |
 
 The 769 MB language model is gone. If you are upgrading, its weights are still on disk —
 **Settings → Recording → Speech models** offers to remove them.
@@ -182,7 +188,9 @@ The phone can answer for itself, without a computer:
 
 ## Honest limitations
 
-- Transcription is English only, and it is a small model. Names, jargon and crosstalk are where it
+- Transcription is a small multilingual model. Russian comes back well but not perfectly
+  (an inflection or ё→е here and there); a sentence that switches language half way is decoded as
+  one language. Names, jargon and crosstalk are where it
   struggles, and **nothing fixes them afterwards** — there is no correction pass. What you read is
   what was heard.
 - The speaker markers in the log are a guess from loudness and zero-crossing rate. Nobody is

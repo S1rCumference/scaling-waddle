@@ -82,6 +82,22 @@ interface TranscriptDao {
     @Query("SELECT COUNT(*) FROM transcript_segments")
     suspend fun count(): Int
 
+    // --- backup -------------------------------------------------------------------------------
+
+    @Query("SELECT COALESCE(MAX(id), 0) FROM transcript_segments")
+    suspend fun maxId(): Long
+
+    /** The days that gained lines since the backup last looked, by row id. */
+    @Query("SELECT DISTINCT day_key FROM transcript_segments WHERE id > :afterId")
+    suspend fun dayKeysAfterId(afterId: Long): List<Int>
+
+    @Query("SELECT * FROM transcript_segments WHERE day_key = :dayKey ORDER BY start_ts ASC")
+    suspend fun forDay(dayKey: Int): List<TranscriptSegment>
+
+    /** Whether a restored line is already here, so restoring the same file twice adds nothing. */
+    @Query("SELECT COUNT(*) FROM transcript_segments WHERE start_ts = :startTs AND text = :text")
+    suspend fun countMatching(startTs: Long, text: String): Int
+
     @Query(
         """
         SELECT day_key AS dayKey, COUNT(*) AS count, MIN(start_ts) AS firstTs, MAX(end_ts) AS lastTs

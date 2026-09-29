@@ -52,6 +52,7 @@ class RecorderApplication : Application() {
         }
         RecordingWatchdog.ensureScheduled(this)
         SummaryWorker.ensureScheduled(this)
+        com.recorder.app.data.BackupWorker.ensureScheduled(this)
     }
 
     private companion object {

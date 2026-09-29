@@ -868,6 +868,31 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     fun resumeNow() = RecordingService.resumeNow()
 
+    // --- Backup -----------------------------------------------------------------------------
+
+    val backupEnabled: StateFlow<Boolean> = settings.backupEnabled
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val backupLastTs: StateFlow<Long> = settings.backupLastTs
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0L)
+    val backupProblem: StateFlow<String> = settings.backupProblem
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
+    fun setBackupEnabled(enabled: Boolean) = viewModelScope.launch { settings.setBackupEnabled(enabled) }
+
+    fun backUpNow() = viewModelScope.launch {
+        _status.value = com.recorder.app.data.Backups.run(getApplication(), force = true).message
+    }
+
+    fun restoreBackup(uris: List<android.net.Uri>) = viewModelScope.launch {
+        if (uris.isEmpty()) return@launch
+        val r = com.recorder.app.data.Backups.restore(getApplication(), uris)
+        _status.value = buildString {
+            append("Restored ${r.added} line(s)")
+            if (r.alreadyThere > 0) append(", ${r.alreadyThere} already here")
+            if (r.unreadable > 0) append(", ${r.unreadable} unreadable")
+        }
+    }
+
     // --- Schedule ---------------------------------------------------------------------------
 
     val schedule: StateFlow<com.recorder.core.storage.RecordingSchedule> = settings.schedule

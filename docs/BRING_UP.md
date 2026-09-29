@@ -43,7 +43,7 @@ Expected: both rows show ✓, and a "Recorder / Listening" notification appears.
 ## 3. Models
 
 1. **Next** to the models step.
-2. There are two, both required: **Silero VAD** (2 MB) and **Parakeet TDT** (460 MB). Nothing to
+2. There are two, both required: **Silero VAD** (2 MB) and **Parakeet TDT v3** (465 MB). Nothing to
    choose — there is no language model to download any more.
 3. **Download**.
 

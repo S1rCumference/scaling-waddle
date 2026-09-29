@@ -61,12 +61,16 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
     val summaryKeySet by viewModel.summaryKeySet.collectAsState()
     val summaryProblem by viewModel.summaryProblem.collectAsState()
     val schedule by viewModel.schedule.collectAsState()
+    val backupOn by viewModel.backupEnabled.collectAsState()
+    val backupLast by viewModel.backupLastTs.collectAsState()
+    val backupProblem by viewModel.backupProblem.collectAsState()
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(if (LocalCompact.current) 4.dp else 16.dp),
     ) {
         Group("Recording") {
         Section("Schedule", "schedule", value = scheduleSummary(schedule)) { ScheduleSection(viewModel) }
+        Section("Backup", "backup", value = backupSummary(backupOn, backupLast, backupProblem)) { BackupSection(viewModel) }
         Section("Microphone sensitivity", "mic", value = "Opens a segment at ${"%.2f".format(threshold)}") { MicSensitivitySection(viewModel) }
         Section("Flag phrases", "flags", value = if (triggers.isEmpty()) "None set" else "${triggers.size} phrase(s)") {
             Text(
@@ -405,7 +409,46 @@ private fun MicSensitivitySection(viewModel: RecorderViewModel) {
  * teaching the wrong thing, and there is no way to tell that from the outside unless the
  * list is visible. It is a plain list of substitutions, not training of any kind.
  */
-private val DAY_NAMES = java.time.DayOfWeek.values().map {
+private fun backupSummary(on: Boolean, last: Long, problem: String): String = when {
+    problem.isNotEmpty() -> "Problem: $problem"
+    !on -> "Off — the app holds the only copy"
+    last == 0L -> "Daily, not run yet"
+    else -> "Daily · last ${Clocks.dayAndTime(last)}"
+}
+
+/**
+ * The second copy. Daily, to Download/Recorder/Backup, one file per day, rewritten when that
+ * day changes — including deletes, so a deleted line is gone from the backup too.
+ */
+@Composable
+private fun BackupSection(viewModel: RecorderViewModel) {
+    val on by viewModel.backupEnabled.collectAsState()
+    val restore = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris -> viewModel.restoreBackup(uris) }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Back up daily", Modifier.weight(1f))
+        Switch(checked = on, onCheckedChange = viewModel::setBackupEnabled)
+    }
+    Text(
+        "One file per day in Download/Recorder/Backup. They survive uninstalling the app and " +
+            "can be copied off with a cable or a file manager. Text only — no audio is ever " +
+            "stored. Deleting lines here removes them from the backup at the next run.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Row {
+        TextButton(onClick = viewModel::backUpNow) { Text("Back up now") }
+        TextButton(onClick = { restore.launch(arrayOf("*/*")) }) { Text("Restore…") }
+    }
+    Text(
+        "Restore: pick one or more recorder-YYYY-MM-DD.jsonl files. Lines already here are " +
+            "skipped, so restoring twice is harmless.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+}
+
+private val DAY_NAMES =java.time.DayOfWeek.values().map {
     it.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.getDefault())
 }
 

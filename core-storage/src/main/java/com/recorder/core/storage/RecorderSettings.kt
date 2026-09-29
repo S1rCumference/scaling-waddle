@@ -217,6 +217,40 @@ class RecorderSettings(private val context: Context) {
         it[Keys.SCHEDULE_OVERRIDE_UNTIL] = 0L
     }
 
+    // --- backup -------------------------------------------------------------------------------
+
+    /** On by default: the database is otherwise the only copy of everything recorded. */
+    val backupEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.BACKUP_ENABLED] ?: true }
+
+    /** Highest transcript row id the backup has written, so the next run knows what is new. */
+    val backupWatermark: Flow<Long> = context.dataStore.data.map { it[Keys.BACKUP_WATERMARK] ?: 0L }
+
+    /** Days whose files must be rewritten whatever the watermark says: deletes and undos. */
+    val backupDirtyDays: Flow<Set<Int>> = context.dataStore.data.map { prefs ->
+        prefs[Keys.BACKUP_DIRTY].orEmpty().mapNotNull { it.toIntOrNull() }.toSet()
+    }
+
+    val backupLastTs: Flow<Long> = context.dataStore.data.map { it[Keys.BACKUP_LAST_TS] ?: 0L }
+
+    /** Why the last backup failed; blank when it worked. */
+    val backupProblem: Flow<String> = context.dataStore.data.map { it[Keys.BACKUP_PROBLEM] ?: "" }
+
+    suspend fun setBackupEnabled(enabled: Boolean) = edit { it[Keys.BACKUP_ENABLED] = enabled }
+
+    suspend fun markBackupDirty(days: Set<Int>) = edit {
+        if (days.isNotEmpty()) it[Keys.BACKUP_DIRTY] = it[Keys.BACKUP_DIRTY].orEmpty() + days.map(Int::toString)
+    }
+
+    /** After a run: the new watermark, the days now written, and whether it worked. */
+    suspend fun recordBackup(watermark: Long, written: Set<Int>, problem: String) = edit {
+        it[Keys.BACKUP_WATERMARK] = watermark
+        it[Keys.BACKUP_DIRTY] = it[Keys.BACKUP_DIRTY].orEmpty() - written.map(Int::toString).toSet()
+        it[Keys.BACKUP_PROBLEM] = problem
+        if (problem.isEmpty()) it[Keys.BACKUP_LAST_TS] = System.currentTimeMillis()
+    }
+
+    suspend fun setBackupProblem(problem: String) = edit { it[Keys.BACKUP_PROBLEM] = problem }
+
     suspend fun setScheduleOverride(override: ScheduleOverride?) = edit {
         it[Keys.SCHEDULE_OVERRIDE_RECORD] = override?.record ?: true
         it[Keys.SCHEDULE_OVERRIDE_UNTIL] = override?.untilMs ?: 0L
@@ -330,6 +364,11 @@ class RecorderSettings(private val context: Context) {
         val TRIGGERS: Preferences.Key<Set<String>> = stringSetPreferencesKey("trigger_keywords")
         val RECORDING_ENABLED = booleanPreferencesKey("recording_enabled")
         val SCHEDULE_ENABLED = booleanPreferencesKey("schedule_enabled")
+        val BACKUP_ENABLED = booleanPreferencesKey("backup_enabled")
+        val BACKUP_WATERMARK = longPreferencesKey("backup_watermark_id")
+        val BACKUP_DIRTY: Preferences.Key<Set<String>> = stringSetPreferencesKey("backup_dirty_days")
+        val BACKUP_LAST_TS = longPreferencesKey("backup_last_ts")
+        val BACKUP_PROBLEM = stringPreferencesKey("backup_problem")
         val SCHEDULE_DAYS = stringPreferencesKey("schedule_days")
         val SCHEDULE_OVERRIDE_RECORD = booleanPreferencesKey("schedule_override_record")
         val SCHEDULE_OVERRIDE_UNTIL = longPreferencesKey("schedule_override_until")

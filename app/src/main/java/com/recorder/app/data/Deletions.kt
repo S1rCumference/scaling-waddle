@@ -90,6 +90,8 @@ object Deletions {
         }
 
         _undo.value = undone
+        // The backup of those days still holds the lines; rewrite it so deleting means gone.
+        runCatching { ServiceLocator.settings.markBackupDirty(undone.segments.map { it.dayKey }.toSet()) }
         Diagnostics.i(
             TAG,
             "deleted ${undone.segments.size} line(s), ${undone.corrections.size} correction(s), " +
@@ -128,6 +130,7 @@ object Deletions {
             db.flagged().restore(held.flags)
         }
         _undo.value = null
+        runCatching { ServiceLocator.settings.markBackupDirty(held.segments.map { it.dayKey }.toSet()) }
         Diagnostics.i(TAG, "restored ${held.segments.size} line(s)")
         held.segments.size
     }
