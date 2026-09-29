@@ -379,6 +379,16 @@ class ModelInstaller(private val context: Context) {
      */
     fun discardIncomplete(entry: ModelEntry): Boolean {
         if (entry.isInstalled(context)) return false
+        if (entry.role == ModelRole.ASR && ModelHealth.asrIsLegacy(context)) {
+            // The directory holds an older speech model that still verifies and is transcribing
+            // right now. Wiping it — which is what uninstall does for an archive — would stop the
+            // phone writing anything down until the new model finished downloading. Only the
+            // half-done download and its staging area are unfinished; those are all that go.
+            entry.stagingDir(context).deleteRecursively()
+            entry.partFile(context).delete()
+            InstallRecord.delete(entry.destinationDir(context), entry.id)
+            return true
+        }
         uninstall(entry)
         return true
     }

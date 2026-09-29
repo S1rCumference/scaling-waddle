@@ -457,12 +457,23 @@ private fun ModelsSection(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
     val catalogue = remember { viewModel.catalogue() }
 
     Text(
-        "Two files, about 460 MB, downloaded once and then never again: a voice detector that " +
-            "decides when somebody is speaking, and a speech recogniser that writes it down. " +
-            "Both run on this phone and neither ever leaves it. There is no language model here " +
-            "any more — summaries are a network request, so there is nothing to download for them.",
+        "Two files, about 465 MB, downloaded once and then never again: a voice detector that " +
+            "decides when somebody is speaking, and a speech recogniser that writes it down — " +
+            "Russian and English, detected automatically. Both run on this phone and neither " +
+            "ever leaves it.",
         style = MaterialTheme.typography.bodySmall,
     )
+    // Said, not left to be inferred from a "not downloaded" row. The phone is still transcribing
+    // on the old model, so nothing is broken — but Russian is not being written down yet.
+    if (remember(downloadStates) { viewModel.speechModelIsLegacy() }) {
+        Text(
+            "Still using the English-only speech model. Download Parakeet v3 below to transcribe " +
+                "Russian too — recording carries on, in English, until it has finished.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
 
     catalogue.forEach { entry ->
         val isInstalled = viewModel.isModelInstalled(entry)

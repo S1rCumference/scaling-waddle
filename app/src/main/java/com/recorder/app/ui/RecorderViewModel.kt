@@ -765,6 +765,9 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     fun isModelInstalled(entry: ModelEntry): Boolean = entry.isInstalled(getApplication())
 
     /** Queues a model from Settings, using the same service the wizard uses. */
+    /** True while the phone is on the English-only model because v3 has not downloaded yet. */
+    fun speechModelIsLegacy(): Boolean = ModelHealth.asrIsLegacy(getApplication())
+
     fun downloadModel(id: String) {
         ModelDownloadService.start(getApplication(), listOf(id))
         _status.value = "Queued. Progress is in the notification and in Settings → Models."

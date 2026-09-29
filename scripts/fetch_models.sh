@@ -27,8 +27,8 @@ SILERO_URL="${SILERO_URL:-https://github.com/snakers4/silero-vad/raw/master/src/
 SHERPA_VERSION="${SHERPA_VERSION:-1.10.32}"
 SHERPA_AAR_URL="${SHERPA_AAR_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VERSION}/sherpa-onnx-${SHERPA_VERSION}.aar}"
 # Must match the id in app/src/main/assets/models.json: the install record is named after it.
-ASR_MODEL_ID="parakeet-tdt-0.6b-v2-int8"
-PARAKEET_URL="${PARAKEET_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2}"
+ASR_MODEL_ID="parakeet-tdt-0.6b-v3-int8"
+PARAKEET_URL="${PARAKEET_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2}"
 
 mkdir -p "$WORK_DIR"
 

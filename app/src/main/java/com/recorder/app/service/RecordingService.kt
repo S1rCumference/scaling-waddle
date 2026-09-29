@@ -15,6 +15,7 @@ import androidx.core.content.ContextCompat
 import com.recorder.app.BuildConfig
 import com.recorder.app.R
 import com.recorder.app.ServiceLocator
+import com.recorder.app.models.ModelHealth
 import com.recorder.app.cover.CoverPresenter
 import com.recorder.app.ui.MainActivity
 import com.recorder.core.asr.AsrEngineFactory
@@ -66,6 +67,12 @@ class RecordingService : Service() {
      * mean a gap in the recording, and a gap is the one thing this app must not have.
      */
     private var asr: SwappableAsrEngine? = null
+
+    /**
+     * Which speech model the running engine was built from, so a newer one arriving can be
+     * swapped in. Null when the engine is the no-op one.
+     */
+    private var loadedAsrId: String? = null
 
     /** Whether the last frame was dropped, so the detector is reset once per transition. */
     private var wasPaused = false
@@ -151,13 +158,19 @@ class RecordingService : Service() {
         val engine = asr ?: return@launch
         var changed = false
 
-        if (engine.isNoop() && AsrEngineFactory.modelsInstalled(this@RecordingService)) {
+        // Swap when there was no speech model, and also when a different one has arrived —
+        // Parakeet v3 installing over v2 is the case this exists for. The old engine keeps
+        // transcribing until the new one has loaded, and the microphone never stops.
+        val available = ModelHealth.activeAsrId(this@RecordingService)
+        val arrived = available != null && available != loadedAsrId
+        if ((engine.isNoop() || arrived) && AsrEngineFactory.modelsInstalled(this@RecordingService)) {
             val threads = ServiceLocator.settings.asrThreads.first()
             val next = AsrEngineFactory.create(this@RecordingService, threads)
             if (next !is NoopAsrEngine) {
                 engine.swap(next)
+                loadedAsrId = available
                 changed = true
-                Diagnostics.i(TAG, "speech model picked up without stopping: ${next.name}")
+                Diagnostics.i(TAG, "speech model picked up without stopping: ${next.name} ($available)")
             }
         }
 
@@ -229,6 +242,7 @@ class RecordingService : Service() {
                 onFallback = { reason -> Diagnostics.w(TAG, reason) },
             )
             val engine = SwappableAsrEngine(AsrEngineFactory.create(this@RecordingService, threads))
+            loadedAsrId = if (engine.isNoop()) null else ModelHealth.activeAsrId(this@RecordingService)
             if (!AsrEngineFactory.sherpaBundled) {
                 Diagnostics.w(TAG, "sherpa-onnx not bundled in this build; recording produces no text")
             } else if (!AsrEngineFactory.modelsInstalled(this@RecordingService)) {

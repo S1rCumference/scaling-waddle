@@ -19,14 +19,52 @@ object ModelHealth {
             .getOrDefault(emptyList())
             .map { it to it.installProblem(context) }
 
-    /** Null when the speech model is complete, otherwise why it will not be loaded. */
+    /**
+     * Speech models this app used to ship, newest first, that are still worth transcribing with
+     * while their replacement downloads.
+     *
+     * 4.1 moved from Parakeet v2 (English only) to v3 (Russian, English and 23 more). The new one
+     * is a 465 MB download, and without this a phone that had v2 fully installed would have
+     * stopped writing anything down the moment the app updated — for however long the download
+     * took, or forever if nobody pressed the button. v2's files and its install record stay on
+     * disk untouched until v3's staged install moves over them, so v2 is loadable, and verified,
+     * right up to that moment.
+     */
+    internal val LEGACY_ASR_IDS = listOf("parakeet-tdt-0.6b-v2-int8")
+
+    /**
+     * Which speech model's install record the files on disk satisfy: the catalogue's current one
+     * if it is complete, otherwise the newest legacy one that still is, otherwise null.
+     *
+     * Pure over a directory so the fallback — the one thing between an app update and a silent
+     * recorder — is tested on real files rather than trusted.
+     */
+    internal fun verifiedAsrId(dir: java.io.File, currentId: String, legacyIds: List<String>): String? =
+        (listOf(currentId) + legacyIds).firstOrNull { InstallRecord.problem(dir, it) == null }
+
+    /** The id of the speech model that will actually be loaded, or null if none will. */
+    fun activeAsrId(context: Context): String? {
+        val entry = asrEntry(context) ?: return null
+        return verifiedAsrId(entry.destinationDir(context), entry.id, LEGACY_ASR_IDS)
+    }
+
+    /** Null when a speech model is complete, otherwise why none will be loaded. */
     fun asrProblem(context: Context): String? {
-        val entry = runCatching { ModelCatalog.load(context) }
-            .getOrNull()
-            ?.firstOrNull { it.role == ModelRole.ASR }
+        val entry = asrEntry(context)
             ?: return null // No catalogue entry to check against; the file checks still apply.
+        if (activeAsrId(context) != null) return null
         return entry.installProblem(context)?.let { "${entry.displayName}: $it" }
     }
+
+    /** Whether the phone is still on an older speech model while the current one is missing. */
+    fun asrIsLegacy(context: Context): Boolean {
+        val entry = asrEntry(context) ?: return false
+        val active = activeAsrId(context) ?: return false
+        return active != entry.id
+    }
+
+    private fun asrEntry(context: Context): ModelEntry? =
+        runCatching { ModelCatalog.load(context) }.getOrNull()?.firstOrNull { it.role == ModelRole.ASR }
 
     /**
      * Model files on disk that the manifest no longer mentions, with their sizes.
