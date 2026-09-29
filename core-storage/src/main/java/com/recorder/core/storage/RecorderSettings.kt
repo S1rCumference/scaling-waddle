@@ -190,6 +190,38 @@ class RecorderSettings(private val context: Context) {
 
     suspend fun setRecordingEnabled(enabled: Boolean) = edit { it[Keys.RECORDING_ENABLED] = enabled }
 
+    // --- schedule -----------------------------------------------------------------------------
+
+    /** When to listen. Off (always listen) until the user turns it on. */
+    val schedule: Flow<RecordingSchedule> =
+        context.dataStore.data.map {
+            RecordingSchedule(
+                enabled = it[Keys.SCHEDULE_ENABLED] ?: false,
+                days = RecordingSchedule.decodeDays(it[Keys.SCHEDULE_DAYS]),
+            )
+        }
+
+    /** A one-off "record now" or "off until next start". Null when there is none. */
+    val scheduleOverride: Flow<ScheduleOverride?> =
+        context.dataStore.data.map {
+            val until = it[Keys.SCHEDULE_OVERRIDE_UNTIL] ?: 0L
+            if (until <= 0L) null
+            else ScheduleOverride(it[Keys.SCHEDULE_OVERRIDE_RECORD] ?: true, until)
+        }
+
+    suspend fun setSchedule(schedule: RecordingSchedule) = edit {
+        it[Keys.SCHEDULE_ENABLED] = schedule.enabled
+        it[Keys.SCHEDULE_DAYS] = schedule.encode()
+        // A changed schedule is a fresh instruction; an override made against the old one
+        // would only confuse it.
+        it[Keys.SCHEDULE_OVERRIDE_UNTIL] = 0L
+    }
+
+    suspend fun setScheduleOverride(override: ScheduleOverride?) = edit {
+        it[Keys.SCHEDULE_OVERRIDE_RECORD] = override?.record ?: true
+        it[Keys.SCHEDULE_OVERRIDE_UNTIL] = override?.untilMs ?: 0L
+    }
+
     suspend fun setHeavyTierEnabled(enabled: Boolean) = edit { it[Keys.HEAVY_TIER_ENABLED] = enabled }
 
     suspend fun setSetupComplete(complete: Boolean) = edit { it[Keys.SETUP_COMPLETE] = complete }
@@ -297,6 +329,10 @@ class RecorderSettings(private val context: Context) {
     private object Keys {
         val TRIGGERS: Preferences.Key<Set<String>> = stringSetPreferencesKey("trigger_keywords")
         val RECORDING_ENABLED = booleanPreferencesKey("recording_enabled")
+        val SCHEDULE_ENABLED = booleanPreferencesKey("schedule_enabled")
+        val SCHEDULE_DAYS = stringPreferencesKey("schedule_days")
+        val SCHEDULE_OVERRIDE_RECORD = booleanPreferencesKey("schedule_override_record")
+        val SCHEDULE_OVERRIDE_UNTIL = longPreferencesKey("schedule_override_until")
         val SUMMARY_PROVIDER = stringPreferencesKey("summary_provider")
         val SUMMARY_BASE_URL = stringPreferencesKey("summary_base_url")
         val SUMMARY_MODEL = stringPreferencesKey("summary_model")

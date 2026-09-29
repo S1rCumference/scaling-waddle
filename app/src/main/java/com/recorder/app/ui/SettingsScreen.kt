@@ -34,7 +34,9 @@ import com.recorder.app.service.RecordingService
 import com.recorder.core.llm.cloud.CloudProvider
 import com.recorder.app.summary.SummaryWorker
 import com.recorder.core.storage.Clocks
+import com.recorder.core.storage.DayWindow
 import com.recorder.core.storage.DiagnosticEntry
+import com.recorder.core.storage.RecordingSchedule
 import com.recorder.core.storage.ExportDefaults
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -58,11 +60,13 @@ fun SettingsScreen(viewModel: RecorderViewModel, onRunSetup: () -> Unit = {}) {
     val summariesOn by viewModel.summariesEnabled.collectAsState()
     val summaryKeySet by viewModel.summaryKeySet.collectAsState()
     val summaryProblem by viewModel.summaryProblem.collectAsState()
+    val schedule by viewModel.schedule.collectAsState()
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(if (LocalCompact.current) 4.dp else 16.dp),
     ) {
         Group("Recording") {
+        Section("Schedule", "schedule", value = scheduleSummary(schedule)) { ScheduleSection(viewModel) }
         Section("Microphone sensitivity", "mic", value = "Opens a segment at ${"%.2f".format(threshold)}") { MicSensitivitySection(viewModel) }
         Section("Flag phrases", "flags", value = if (triggers.isEmpty()) "None set" else "${triggers.size} phrase(s)") {
             Text(
@@ -401,6 +405,124 @@ private fun MicSensitivitySection(viewModel: RecorderViewModel) {
  * teaching the wrong thing, and there is no way to tell that from the outside unless the
  * list is visible. It is a plain list of substitutions, not training of any kind.
  */
+private val DAY_NAMES = java.time.DayOfWeek.values().map {
+    it.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.getDefault())
+}
+
+/** "9:00 AM" / "09:00" for a minute of the day; 0 and 1440 both read as midnight. */
+private fun minuteLabel(minute: Int): String {
+    val m = minute % RecordingSchedule.MINUTES_PER_DAY
+    if (m == 0) return "midnight"
+    val h = m / 60
+    val mm = m % 60
+    return if (Clocks.use24Hour.value) "%02d:%02d".format(h, mm)
+    else "%d:%02d %s".format(if (h % 12 == 0) 12 else h % 12, mm, if (h < 12) "AM" else "PM")
+}
+
+private fun windowLabel(w: DayWindow): String = when {
+    !w.enabled -> "off"
+    w.allDay -> "all day"
+    else -> "${minuteLabel(w.startMinute)}–${minuteLabel(w.endMinute)}"
+}
+
+private fun scheduleSummary(s: RecordingSchedule): String {
+    if (!s.enabled) return "Always listening"
+    val distinct = s.days.distinct()
+    return if (distinct.size == 1) "Every day, ${windowLabel(distinct[0])}"
+    else "${s.days.count { it.enabled }} days a week"
+}
+
+/**
+ * Seven rows, one per weekday, each on or off with its own window. A window can cross midnight
+ * (22:00 to 6:00 belongs to the day it starts), and a window whose start and end are the same
+ * is the whole day.
+ */
+@Composable
+private fun ScheduleSection(viewModel: RecorderViewModel) {
+    val schedule by viewModel.schedule.collectAsState()
+    val context = LocalContext.current
+
+    fun pick(minute: Int, onPicked: (Int) -> Unit) {
+        android.app.TimePickerDialog(
+            context,
+            { _, h, m -> onPicked(h * 60 + m) },
+            (minute % RecordingSchedule.MINUTES_PER_DAY) / 60,
+            minute % 60,
+            Clocks.use24Hour.value,
+        ).show()
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Use a schedule", Modifier.weight(1f))
+        Switch(checked = schedule.enabled, onCheckedChange = { viewModel.setSchedule(schedule.copy(enabled = it)) })
+    }
+    Text(
+        if (schedule.enabled) {
+            "Outside these hours the microphone and speech model are fully released — no " +
+                "listening, no battery. The recorder wakes itself at the next start. \"Off till " +
+                "next\" and \"Record 1h\" on the Live screen override it for a while."
+        } else {
+            "Off: the recorder listens around the clock whenever it is switched on."
+        },
+        style = MaterialTheme.typography.bodySmall,
+    )
+    if (!schedule.enabled) return
+
+    Row(Modifier.horizontalScroll(rememberScrollState())) {
+        TextButton(onClick = {
+            val work = DayWindow(true, 9 * 60, 17 * 60)
+            viewModel.setSchedule(
+                schedule.copy(days = List(7) { if (it < 5) work else DayWindow(enabled = false) }),
+            )
+        }) { Text("Weekdays 9–5") }
+        TextButton(onClick = {
+            viewModel.setSchedule(schedule.copy(days = List(7) { schedule.days[0] }))
+        }) { Text("Monday's hours for all") }
+    }
+
+    java.time.DayOfWeek.values().forEach { day ->
+        val w = schedule.window(day)
+        fun update(next: DayWindow) = viewModel.setSchedule(schedule.with(day, next))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Switch(checked = w.enabled, onCheckedChange = { update(w.copy(enabled = it)) })
+            Text(
+                DAY_NAMES[day.value - 1],
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(start = 8.dp).weight(1f),
+            )
+            if (w.enabled) {
+                TextButton(onClick = { pick(w.startMinute) { update(w.copy(startMinute = it)) } }) {
+                    Text(if (w.allDay) "all day" else minuteLabel(w.startMinute))
+                }
+                if (!w.allDay) {
+                    Text("–")
+                    TextButton(onClick = { pick(w.endMinute) { update(w.copy(endMinute = it)) } }) {
+                        Text(minuteLabel(w.endMinute))
+                    }
+                } else {
+                    TextButton(onClick = { update(w.copy(startMinute = 9 * 60, endMinute = 17 * 60)) }) {
+                        Text("set hours")
+                    }
+                }
+            } else {
+                Text("off", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (w.enabled && !w.allDay) {
+            Row(Modifier.fillMaxWidth()) {
+                Text(
+                    if (w.overnight) "ends the next morning" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f).padding(start = 8.dp),
+                )
+                TextButton(onClick = { update(w.copy(startMinute = 0, endMinute = 0)) }) {
+                    Text("all day")
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun Group(title: String, content: @Composable () -> Unit) {
     Text(

@@ -39,6 +39,16 @@ object Clocks {
     fun dayAndTime(ts: Long): String =
         format(if (_use24Hour.value) "EEE d MMM HH:mm" else "EEE d MMM h:mm a", ts)
 
+    /**
+     * "2:32 PM" if [ts] is within the next day, "Mon 9:00 AM" within the week, else with the
+     * date — for "back at …", where the weekday is what matters.
+     */
+    fun upcoming(ts: Long, now: Long = System.currentTimeMillis()): String = when {
+        ts - now < 20 * 3_600_000L -> shortTime(ts)
+        ts - now < 6 * 86_400_000L -> format(if (_use24Hour.value) "EEE HH:mm" else "EEE h:mm a", ts)
+        else -> dayAndTime(ts)
+    }
+
     /** Date and time for a log line or an export header. */
     fun stamp(ts: Long): String =
         format(if (_use24Hour.value) "yyyy-MM-dd HH:mm:ss" else "yyyy-MM-dd h:mm:ss a", ts)

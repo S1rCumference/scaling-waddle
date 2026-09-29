@@ -97,8 +97,8 @@ object SetupStatus {
 
     private fun recordingCheck() = SetupCheck(
         label = "Recording running",
-        ok = RecordingService.state.value == RecordingService.RecorderState.RECORDING,
-        detail = "The recorder is listening right now.",
+        ok = RecordingService.state.value.running,
+        detail = "The recorder is listening right now, or waiting for its schedule.",
         fix = { RecordingService.enableAndStart(it) },
         fixLabel = "Start",
     )

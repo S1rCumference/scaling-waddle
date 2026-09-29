@@ -240,7 +240,11 @@ private fun CoverStatusBar(viewModel: RecorderViewModel) {
     ) {
         val live = state == RecordingService.RecorderState.RECORDING
         Text(
-            text = if (live) "● $elapsed" else "○ paused",
+            text = when {
+                live -> "● $elapsed"
+                state == RecordingService.RecorderState.SCHEDULED_OFF -> "○ off by schedule"
+                else -> "○ paused"
+            },
             color = if (live) CoverColors.live else CoverColors.muted,
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
@@ -331,11 +335,12 @@ private fun ExpandedShell(viewModel: RecorderViewModel, onRunSetup: () -> Unit) 
                                 RecordingService.RecorderState.NEEDS_PERMISSION -> "no mic permission"
                                 RecordingService.RecorderState.ERROR -> "error"
                                 RecordingService.RecorderState.STOPPED -> "stopped"
+                                RecordingService.RecorderState.SCHEDULED_OFF -> "off by schedule"
                             },
                             style = MaterialTheme.typography.labelMedium,
                         )
                         Switch(
-                            checked = recorderState == RecordingService.RecorderState.RECORDING,
+                            checked = recorderState.running,
                             onCheckedChange = viewModel::setRecording,
                             modifier = Modifier.padding(horizontal = 8.dp),
                         )

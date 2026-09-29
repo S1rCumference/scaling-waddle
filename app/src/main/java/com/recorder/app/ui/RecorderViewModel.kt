@@ -802,7 +802,7 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     fun resumeRecordingIfWanted() {
         viewModelScope.launch {
             if (!settings.recordingEnabled.first()) return@launch
-            if (RecordingService.state.value == RecordingService.RecorderState.RECORDING) return@launch
+            if (RecordingService.state.value.running) return@launch
             RecordingService.start(getApplication())
         }
     }
@@ -867,6 +867,36 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     fun pauseFor(minutes: Int) = RecordingService.pauseFor(minutes)
 
     fun resumeNow() = RecordingService.resumeNow()
+
+    // --- Schedule ---------------------------------------------------------------------------
+
+    val schedule: StateFlow<com.recorder.core.storage.RecordingSchedule> = settings.schedule
+        .stateIn(viewModelScope, SharingStarted.Eagerly, com.recorder.core.storage.RecordingSchedule())
+
+    /** When listening comes back while off by schedule; 0 when not off by schedule. */
+    val scheduledOffUntil: StateFlow<Long> = RecordingService.scheduledOffUntil
+
+    fun setSchedule(schedule: com.recorder.core.storage.RecordingSchedule) = viewModelScope.launch {
+        settings.setSchedule(schedule)
+    }
+
+    /** When the schedule next starts after the current window, or null if it never does. */
+    fun nextScheduledStart(): Long? =
+        schedule.value.takeIf { it.enabled }
+            ?.nextStart(System.currentTimeMillis(), java.time.ZoneId.systemDefault())
+
+    /** Listens for [minutes] despite the schedule, then leaves it to the schedule again. */
+    fun recordFor(minutes: Int) = viewModelScope.launch {
+        settings.setScheduleOverride(
+            com.recorder.core.storage.ScheduleOverride(true, System.currentTimeMillis() + minutes * 60_000L),
+        )
+    }
+
+    /** Takes the rest of today's window off: quiet until the schedule next starts. */
+    fun offUntilNextStart() = viewModelScope.launch {
+        val until = nextScheduledStart() ?: return@launch
+        settings.setScheduleOverride(com.recorder.core.storage.ScheduleOverride(false, until))
+    }
 
     fun dismissFlag(id: Long) = viewModelScope.launch { db.flagged().dismiss(id) }
 

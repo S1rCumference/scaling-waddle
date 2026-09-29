@@ -4,8 +4,10 @@ import android.Manifest
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
@@ -31,10 +33,19 @@ import com.recorder.core.audio.segmentSpeech
 import com.recorder.app.StartupGuard
 import com.recorder.app.diag.DeviceWatch
 import com.recorder.core.storage.Diagnostics
+import com.recorder.core.storage.ScheduleDecision
+import com.recorder.core.storage.ScheduleGate
+import java.time.ZoneId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -55,6 +66,13 @@ import kotlinx.coroutines.withTimeoutOrNull
  * opening or closing the phone must not restart, pause, or even reach this service. Its
  * only inputs are the microphone and the settings flag; its only output is rows in the
  * database.
+ *
+ * Two layers. The service itself runs whenever recording is switched on, and a supervisor
+ * inside it decides from the schedule whether to capture right now. Outside the schedule the
+ * microphone, the detector and the speech model are all released — nothing reads audio and
+ * nothing holds 600 MB of model — and an exact alarm wakes the supervisor at the next start.
+ * The service stays up in between because a microphone service cannot be started again from
+ * the background on Android 14+, whereas one that is already running can reopen the mic.
  */
 class RecordingService : Service() {
 
@@ -76,6 +94,22 @@ class RecordingService : Service() {
 
     /** Whether the last frame was dropped, so the detector is reset once per transition. */
     private var wasPaused = false
+
+    /** The capture coroutine, present while the schedule says to listen. */
+    private var captureJob: Job? = null
+
+    /**
+     * Cleared to end capture gracefully: the frame stream completes, the segmenter flushes the
+     * sentence in progress, and it is transcribed before the microphone closes. Cancelling
+     * instead would drop whatever was being said at the moment the schedule ended.
+     */
+    @Volatile
+    private var captureWanted = false
+
+    /** Anything that should make the supervisor look again: an alarm, a setting, the clock. */
+    private val pokes = Channel<Unit>(Channel.CONFLATED)
+
+    private var clockReceiver: BroadcastReceiver? = null
 
     /**
      * Present only so something is alive all day to watch for the phone being closed. The
@@ -118,7 +152,7 @@ class RecordingService : Service() {
         }
 
         Diagnostics.i(TAG, "recording service starting")
-        startPipeline()
+        supervise()
 
         if (BuildConfig.COVER_UI_ENABLED) {
             coverPresenter = CoverPresenter(this).also { it.start() }
@@ -140,11 +174,15 @@ class RecordingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Reaching here at all means the start was permitted, so clear any resume prompt.
         ResumeNotifier.clear(this)
-        if (intent?.action == ACTION_MODELS_CHANGED) adoptNewModels()
-        // Sticky only when actually recording. A service that refused to start — switched off, or
-        // without microphone permission — must not be recreated by the system, or it comes back
-        // recording and that is the same bug by another route.
-        return if (_state.value == RecorderState.RECORDING) START_STICKY else START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_MODELS_CHANGED -> adoptNewModels()
+            ACTION_SCHEDULE_TICK -> pokes.trySend(Unit)
+        }
+        // Sticky only when running. A service that refused to start — switched off, or without
+        // microphone permission — must not be recreated by the system, or it comes back
+        // recording and that is the same bug by another route. Off-by-schedule is running: it
+        // has to be alive to start again at the next window.
+        return if (_state.value.running) START_STICKY else START_NOT_STICKY
     }
 
     /**
@@ -201,18 +239,124 @@ class RecordingService : Service() {
 
     override fun onDestroy() {
         coverPresenter?.stop()
+        clockReceiver?.let { runCatching { unregisterReceiver(it) } }
+        ScheduleAlarm.cancel(this)
         _micSilenced.value = false
+        _scheduledOffUntil.value = 0L
+        // The capture coroutine releases the models itself once it has stopped. Closing them
+        // from here as well could free a model in the middle of a transcription.
         scope.cancel()
-        vad?.close()
-        asr?.close()
         _state.value = RecorderState.STOPPED
         super.onDestroy()
     }
 
-    private fun startPipeline() {
+    /**
+     * Applies the schedule, then sleeps until something could change the answer: the next
+     * window edge, an override running out, a setting being changed, or the clock or time zone
+     * being changed. The exact alarm is what wakes the phone for an edge; the timeout here is
+     * the same edge for when the phone happens to be awake anyway.
+     */
+    private fun supervise() {
+        val settings = ServiceLocator.settings
+        scope.launch {
+            combine(settings.schedule, settings.scheduleOverride) { s, o -> s to o }
+                .distinctUntilChanged()
+                .collect { pokes.trySend(Unit) }
+        }
+        watchClock()
+        scope.launch {
+            while (isActive) {
+                val decision = decideNow()
+                if (decision.record) startCapture() else stopCapture(decision.nextCheckMs)
+                ScheduleAlarm.set(this@RecordingService, decision.nextCheckMs)
+                val wait = decision.nextCheckMs?.let { (it - System.currentTimeMillis()).coerceAtLeast(1_000L) }
+                if (wait == null) pokes.receive() else withTimeoutOrNull(wait) { pokes.receive() }
+            }
+        }
+        // A start from boot that lands outside the schedule never records, so the heartbeat
+        // never gets to vouch for it. A minute alive and deliberately idle is just as healthy.
+        scope.launch {
+            delay(HEARTBEAT_MS)
+            if (_state.value == RecorderState.SCHEDULED_OFF) {
+                runCatching { StartupGuard.markHealthy(this@RecordingService) }
+            }
+        }
+    }
+
+    /**
+     * What the schedule says now. Any failure to read it counts as "record": a recorder that
+     * goes quiet because a preference could not be read is the failure this app exists to avoid.
+     */
+    private suspend fun decideNow(): ScheduleDecision {
+        val settings = ServiceLocator.settings
+        return runCatching {
+            withTimeoutOrNull(SETTING_READ_TIMEOUT_MS) {
+                val now = System.currentTimeMillis()
+                val schedule = settings.schedule.first()
+                val override = settings.scheduleOverride.first()
+                if (override != null && !override.activeAt(now)) settings.setScheduleOverride(null)
+                ScheduleGate.decide(schedule, override, now, ZoneId.systemDefault())
+            }
+        }.getOrNull() ?: ScheduleDecision(record = true, nextCheckMs = null)
+    }
+
+    private fun watchClock() {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                pokes.trySend(Unit)
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_TIME_CHANGED)
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
+        }
+        // System broadcasts, so exported-ness does not matter, but API 33+ insists on a choice.
+        runCatching {
+            ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+            clockReceiver = receiver
+        }.onFailure { Diagnostics.w(TAG, "could not watch for clock changes", it) }
+    }
+
+    private fun startCapture() {
+        if (captureJob?.isActive == true) return
+        if (_state.value == RecorderState.SCHEDULED_OFF) Diagnostics.i(TAG, "schedule: listening again")
+        captureWanted = true
+        _scheduledOffUntil.value = 0L
+        captureJob = scope.launch { runCapture() }
+    }
+
+    private suspend fun stopCapture(nextStartMs: Long?) {
+        captureJob?.let { job ->
+            captureWanted = false
+            // Long enough to transcribe a final sentence; after that, stop regardless.
+            if (withTimeoutOrNull(FLUSH_TIMEOUT_MS) { job.join() } == null) job.cancelAndJoin()
+            Diagnostics.i(TAG, "schedule: off; microphone and speech model released")
+        }
+        captureJob = null
+        _scheduledOffUntil.value = nextStartMs ?: Long.MAX_VALUE
+        _state.value = RecorderState.SCHEDULED_OFF
+        _recordingSince.value = null
+        updateNotification(
+            if (nextStartMs == null) getString(R.string.notification_scheduled_off)
+            else getString(R.string.notification_scheduled_off_until, whenText(nextStartMs)),
+        )
+    }
+
+    private fun whenText(ts: Long): String = com.recorder.core.storage.Clocks.upcoming(ts)
+
+    /** Idempotent, so the end of capture and a racing model swap cannot close twice. */
+    private fun releaseModels() = synchronized(this) {
+        vad?.let { runCatching { it.close() } }
+        vad = null
+        asr?.let { runCatching { it.close() } }
+        asr = null
+        loadedAsrId = null
+    }
+
+    private suspend fun runCapture() {
         // The tunables live in DataStore, so the pipeline is assembled inside a coroutine
         // rather than blocking onCreate on a disk read.
-        scope.launch {
+        run {
             val settings = ServiceLocator.settings
             val threads = settings.asrThreads.first()
             val threshold = settings.vadThreshold.first()
@@ -260,66 +404,74 @@ class RecordingService : Service() {
                 Diagnostics.i(TAG, it)
             }
             asr = engine
-            heartbeat()
-
-            val pipeline = TranscriptPipeline(
-                asr = engine,
-                transcripts = ServiceLocator.database.transcripts(),
-                keywordWatcher = KeywordWatcher(
-                    ServiceLocator.database.flagged(),
-                    ServiceLocator.settings,
-                ),
-            )
-
-            _state.value = RecorderState.RECORDING
-            _recordingSince.value = System.currentTimeMillis()
-            PowerMetrics.onRecordingStarted()
-            updateNotification(getString(R.string.notification_recording, detector.activeName, engine.name))
-
-            AudioCapture(onSilencedChanged = { silenced ->
-                _micSilenced.value = silenced
-                if (silenced) {
-                    Diagnostics.w(TAG, "microphone is being given to another app; this recording is silent")
-                } else {
-                    Diagnostics.i(TAG, "microphone silencing cleared")
-                }
-            }).frames()
-                // Pausing drops frames; it does not close the microphone. Reopening the mic
-                // is how audio gets lost, and a paused recorder that has to be restarted by
-                // hand cannot resume itself on Android 14+, where a microphone service
-                // started from the background is refused outright.
-                .transform { frame ->
-                    if (pauseElapsed()) resumeNow()
-                    if (_pausedUntil.value > 0L) {
-                        if (!wasPaused) {
-                            wasPaused = true
-                            detector.reset()
-                            Diagnostics.i(TAG, "recording paused until ${clock(_pausedUntil.value)}")
-                        }
-                        return@transform
-                    }
-                    if (wasPaused) {
-                        wasPaused = false
-                        detector.reset()
-                    }
-                    emit(frame)
-                }
-                .segmentSpeech(
-                    vad = ObservedVad(detector, threshold, stats),
-                    segmenter = SpeechSegmenter(threshold = threshold),
-                    overCapture = OverCapture(speechThreshold = threshold),
-                    onFallbackCapture = { stats.onFallbackCapture() },
+            val beat = scope.heartbeat()
+            try {
+                val pipeline = TranscriptPipeline(
+                    asr = engine,
+                    transcripts = ServiceLocator.database.transcripts(),
+                    keywordWatcher = KeywordWatcher(
+                        ServiceLocator.database.flagged(),
+                        ServiceLocator.settings,
+                    ),
                 )
-                .catch { error ->
-                    Diagnostics.e(TAG, "capture pipeline failed", error)
-                    _state.value = RecorderState.ERROR
-                    updateNotification(getString(R.string.notification_error))
-                }
-                .collect { segment ->
-                    val startedAt = System.currentTimeMillis()
-                    val hadText = pipeline.process(segment)
-                    stats.onSegment(segment.durationMs, System.currentTimeMillis() - startedAt, hadText)
-                }
+
+                _state.value = RecorderState.RECORDING
+                _recordingSince.value = System.currentTimeMillis()
+                PowerMetrics.onRecordingStarted()
+                updateNotification(getString(R.string.notification_recording, detector.activeName, engine.name))
+
+                AudioCapture(onSilencedChanged = { silenced ->
+                    _micSilenced.value = silenced
+                    if (silenced) {
+                        Diagnostics.w(TAG, "microphone is being given to another app; this recording is silent")
+                    } else {
+                        Diagnostics.i(TAG, "microphone silencing cleared")
+                    }
+                }).frames()
+                    // Completing here, rather than cancelling, is what lets the segmenter below
+                    // flush the sentence in progress when the schedule ends.
+                    .takeWhile { captureWanted }
+                    // Pausing drops frames; it does not close the microphone. Reopening the mic
+                    // is how audio gets lost, and a paused recorder that has to be restarted by
+                    // hand cannot resume itself on Android 14+, where a microphone service
+                    // started from the background is refused outright.
+                    .transform { frame ->
+                        if (pauseElapsed()) resumeNow()
+                        if (_pausedUntil.value > 0L) {
+                            if (!wasPaused) {
+                                wasPaused = true
+                                detector.reset()
+                                Diagnostics.i(TAG, "recording paused until ${clock(_pausedUntil.value)}")
+                            }
+                            return@transform
+                        }
+                        if (wasPaused) {
+                            wasPaused = false
+                            detector.reset()
+                        }
+                        emit(frame)
+                    }
+                    .segmentSpeech(
+                        vad = ObservedVad(detector, threshold, stats),
+                        segmenter = SpeechSegmenter(threshold = threshold),
+                        overCapture = OverCapture(speechThreshold = threshold),
+                        onFallbackCapture = { stats.onFallbackCapture() },
+                    )
+                    .catch { error ->
+                        Diagnostics.e(TAG, "capture pipeline failed", error)
+                        _state.value = RecorderState.ERROR
+                        updateNotification(getString(R.string.notification_error))
+                    }
+                    .collect { segment ->
+                        val startedAt = System.currentTimeMillis()
+                        val hadText = pipeline.process(segment)
+                        stats.onSegment(segment.durationMs, System.currentTimeMillis() - startedAt, hadText)
+                    }
+            } finally {
+                beat.cancel()
+                _micSilenced.value = false
+                releaseModels()
+            }
         }
     }
 
@@ -328,7 +480,7 @@ class RecordingService : Service() {
      * with no computer attached can answer "is it hearing me?" from Settings → Diagnostics
      * instead of from logcat, which is unreachable on this device.
      */
-    private fun heartbeat() = scope.launch {
+    private fun CoroutineScope.heartbeat() = launch {
         var noted: String? = null
         while (isActive) {
             delay(HEARTBEAT_MS)
@@ -395,13 +547,25 @@ class RecordingService : Service() {
             .build()
     }
 
-    enum class RecorderState { STOPPED, RECORDING, NEEDS_PERMISSION, ERROR }
+    enum class RecorderState {
+        STOPPED,
+        RECORDING,
+        NEEDS_PERMISSION,
+        ERROR,
+
+        /** Running, with the microphone released, until the schedule's next window. */
+        SCHEDULED_OFF;
+
+        /** Whether the service is up and doing what it should — listening or waiting to. */
+        val running: Boolean get() = this == RECORDING || this == SCHEDULED_OFF
+    }
 
     companion object {
         private const val TAG = "RecordingService"
         const val CHANNEL_ID = "recording"
         private const val HEARTBEAT_MS = 60_000L
         private const val NOTIFICATION_ID = 1
+        private const val FLUSH_TIMEOUT_MS = 30_000L
 
         private val _state = MutableStateFlow(RecorderState.STOPPED)
         private val _recordingSince = MutableStateFlow<Long?>(null)
@@ -464,6 +628,17 @@ class RecordingService : Service() {
         private const val SETTING_READ_TIMEOUT_MS = 2_000L
 
         const val ACTION_RESUME = "com.recorder.app.action.RESUME"
+
+        /** From [ScheduleAlarm]: a window edge has come, look at the schedule again. */
+        const val ACTION_SCHEDULE_TICK = "com.recorder.app.action.SCHEDULE_TICK"
+
+        private val _scheduledOffUntil = MutableStateFlow(0L)
+
+        /**
+         * While off by schedule, when listening is next due to start; [Long.MAX_VALUE] when no
+         * day in the schedule is switched on. 0 when not off by schedule.
+         */
+        val scheduledOffUntil: StateFlow<Long> = _scheduledOffUntil.asStateFlow()
 
         /** Tells a running recorder that a model has arrived since it started. */
         const val ACTION_MODELS_CHANGED = "com.recorder.app.action.MODELS_CHANGED"

@@ -100,13 +100,26 @@ private fun PauseBar(viewModel: RecorderViewModel) {
     val compact = LocalCompact.current
     val state by viewModel.recorderState.collectAsState()
     val pausedUntil by viewModel.pausedUntil.collectAsState()
-    if (state != RecordingService.RecorderState.RECORDING) return
+    val offUntil by viewModel.scheduledOffUntil.collectAsState()
+    val schedule by viewModel.schedule.collectAsState()
+    val scheduled = state == RecordingService.RecorderState.SCHEDULED_OFF
+    if (state != RecordingService.RecorderState.RECORDING && !scheduled) return
 
     Row(
         Modifier.fillMaxWidth().padding(vertical = if (compact) 0.dp else 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (pausedUntil > 0L) {
+        if (scheduled) {
+            Text(
+                if (offUntil in 1 until Long.MAX_VALUE) "Off by schedule · back ${Clocks.upcoming(offUntil)}"
+                else "Off by schedule",
+                color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = if (compact) 12.sp else 13.sp,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = { viewModel.recordFor(PAUSE_MINUTES) }) { Text("Record 1h", fontSize = 13.sp) }
+            TextButton(onClick = { viewModel.setRecording(false) }) { Text("Stop", fontSize = 13.sp) }
+        } else if (pausedUntil > 0L) {
             Text(
                 "Paused until ${Clocks.shortTime(pausedUntil)}",
                 color = if (compact) CoverColors.dim else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -118,6 +131,12 @@ private fun PauseBar(viewModel: RecorderViewModel) {
             Spacer(Modifier.weight(1f))
             TextButton(onClick = { viewModel.pauseFor(PAUSE_MINUTES) }) {
                 Text("Pause 1h", fontSize = 13.sp)
+            }
+            // With a schedule, "not today" is the common wish, and it ends by itself.
+            if (schedule.enabled) {
+                TextButton(onClick = viewModel::offUntilNextStart) {
+                    Text("Off till next", fontSize = 13.sp)
+                }
             }
             TextButton(onClick = { viewModel.setRecording(false) }) {
                 Text("Stop", fontSize = 13.sp)
